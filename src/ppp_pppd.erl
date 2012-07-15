@@ -1,0 +1,175 @@
+-module(ppp_pppd).
+
+-behaviour(gen_server).
+
+%% API
+-export([start_link/1]).
+-export([send/2]).
+
+%% gen_server callbacks
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+	 terminate/2, code_change/3]).
+
+-define(SERVER, ?MODULE). 
+
+-record(state, {port, connection}).
+
+%%%===================================================================
+%%% API
+%%%===================================================================
+
+send(TransportRef, Packet) ->
+    gen_server:call(TransportRef, {send, Packet}).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Starts the server
+%%
+%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
+%% @end
+%%--------------------------------------------------------------------
+start_link(Role) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [Role], []).
+
+%%%===================================================================
+%%% gen_server callbacks
+%%%===================================================================
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Initializes the server
+%%
+%% @spec init(Args) -> {ok, State} |
+%%                     {ok, State, Timeout} |
+%%                     ignore |
+%%                     {stop, Reason}
+%% @end
+%%--------------------------------------------------------------------
+init([Role]) ->
+    Args = gen_opts() ++ role_opts(Role),
+    Port = open_port({spawn_executable, "/usr/sbin/pppd"}, [exit_status, binary, {args, Args}]),
+    {ok, Connection} = ppp_link:start_link(?MODULE, self()),
+    {ok, #state{port = Port, connection = Connection}}.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Handling call messages
+%%
+%% @spec handle_call(Request, From, State) ->
+%%                                   {reply, Reply, State} |
+%%                                   {reply, Reply, State, Timeout} |
+%%                                   {noreply, State} |
+%%                                   {noreply, State, Timeout} |
+%%                                   {stop, Reason, Reply, State} |
+%%                                   {stop, Reason, State}
+%% @end
+%%--------------------------------------------------------------------
+handle_call({send, Packet}, _From, State = #state{port = Port}) ->
+    Data = ppp_hdlc:encapsulate([{16#ff, 16#03, Packet}]),
+    port_command(Port, Data),
+    {reply, ok, State}.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Handling cast messages
+%%
+%% @spec handle_cast(Msg, State) -> {noreply, State} |
+%%                                  {noreply, State, Timeout} |
+%%                                  {stop, Reason, State}
+%% @end
+%%--------------------------------------------------------------------
+handle_cast(Msg, State) ->
+    io:format("pppd Cast: ~p~n", [Msg]),
+    {noreply, State}.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Handling all non call/cast messages
+%%
+%% @spec handle_info(Info, State) -> {noreply, State} |
+%%                                   {noreply, State, Timeout} |
+%%                                   {stop, Reason, State}
+%% @end
+%%--------------------------------------------------------------------
+handle_info({Port, {data, Data}}, State = #state{port = Port, connection = Connection}) ->
+    io:format("pppd Data: ~p~n", [Data]),
+    HDLC = ppp_hdlc:decapsulate(Data),
+    lists:foreach(fun({_Address, _Control, PPP}) -> ppp_link:packet_in(Connection, PPP) end, HDLC),
+    {noreply, State};
+
+handle_info({Port, {exit_status, Status}}, State = #state{port = Port}) ->
+    io:format("pppd existed with: ~p~n", [Status]),
+    {stop, normal, State};
+
+handle_info(Info, State) ->
+    io:format("pppd Info: ~p~n", [Info]),
+    {noreply, State}.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% This function is called by a gen_server when it is about to
+%% terminate. It should be the opposite of Module:init/1 and do any
+%% necessary cleaning up. When it returns, the gen_server terminates
+%% with Reason. The return value is ignored.
+%%
+%% @spec terminate(Reason, State) -> void()
+%% @end
+%%--------------------------------------------------------------------
+terminate(_Reason, _State) ->
+    io:format("ppp_pppd ~p terminated~n", [self()]),
+    ok.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Convert process state when code is changed
+%%
+%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
+%% @end
+%%--------------------------------------------------------------------
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
+
+gen_opts() ->
+    [
+     "nodetach",
+     "debug",
+     "notty",
+     "default-asyncmap",
+     "lcp-max-configure", "1",
+     "lcp-echo-failure", "3",
+     "lcp-echo-interval", "10",
+     "lcp-echo-adaptive",
+     "mtu", "1492",
+     "mru", "1492",
+     "noaccomp",
+     "nodeflate",
+     "noccp",
+     "novj",
+     "novjccomp"
+].
+
+role_opts(server) ->
+    [
+     "silent",
+     "passive",
+     "noauth",
+     "ms-dns", "192.168.13.7",
+     "192.168.13.54:192.168.54.1"
+    ];
+
+role_opts(client) ->
+    [
+     "noauth",
+     "usepeerdns",
+     "user", "erlang"
+    ].
