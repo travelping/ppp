@@ -48,9 +48,9 @@ start_link(TransportModule, TransportRef) ->
 init([Transport]) ->
     process_flag(trap_exit, true),
 
-    {ok, LCP} = ppp_lcp:start_link(self()),
-    ppp_lcp:open(LCP),
-    ppp_lcp:up(LCP),
+    {ok, LCP} = ppp_lcp:start_link(self(), [silent]),
+    ppp_lcp:loweropen(LCP),
+    ppp_lcp:lowerup(LCP),
     {ok, establish, #state{transport = Transport, lcp = LCP}}.
 
 establish({packet_in, Frame}, State = #state{lcp = LCP})
