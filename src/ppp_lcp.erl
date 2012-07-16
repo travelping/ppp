@@ -1,6 +1,7 @@
 -module(ppp_lcp).
 
 -behaviour(ppp_fsm).
+-behaviour(ppp_proto).
 
 %% API
 -export([start_link/2]).
