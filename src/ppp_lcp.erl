@@ -13,6 +13,7 @@
 -export([handler_lower_event/3]).
 
 -include("ppp_fsm.hrl").
+-include("ppp_lcp.hrl").
 
 -define(MINMRU, 128).
 -define(MAXMRU, 1500).
@@ -20,32 +21,6 @@
 -define(PPP_LQR, 16#c025).
 -define(CBCP_OPT, 6).
 -define(CHAP_ALL_AUTH, ['MS-CHAP-v2', 'MS-CHAP', sha1, md5]).
-
--record(epdisc, {
-	  class = 0			:: integer(),
-	  address = <<>>		:: binary()
-}).
-
--record(lcp_opts, {
-	  neg_mru = false		:: boolean(),			%% Negotiate the MRU?
-	  neg_asyncmap = false		:: boolean(),			%% Negotiate the async map?
-	  neg_auth = []			:: atom() | [atom()],		%% Ask for UPAP, CHAP (and which MD types (hashing algorithm)) and/or EAP authentication?
-	  neg_magicnumber = false	:: boolean(),			%% Ask for magic number?
-	  neg_pcompression = false	:: boolean(),			%% HDLC Protocol Field Compression?
-	  neg_accompression = false	:: boolean(),			%% HDLC Address/Control Field Compression?
-	  neg_lqr = false		:: boolean(),			%% Negotiate use of Link Quality Reports
-	  neg_cbcp = false		:: boolean(),			%% Negotiate use of CBCP
-	  neg_mrru = false		:: boolean(),			%% negotiate multilink MRRU
-	  neg_ssnhf = false		:: boolean(),			%% negotiate short sequence numbers
-	  neg_endpoint  = false		:: boolean(),			%% negotiate endpoint discriminator
-	  mru = 0			:: integer(),			%% Value of MRU
-	  mrru = 0			:: integer(),			%% Value of MRRU, and multilink enable
-	  asyncmap = 0			:: integer(),			%% Value of async map
-	  magicnumber = 0		:: integer(),
-	  numloops = 0			:: integer(),			%% Number of loops during magic number neg.
-	  lqr_period = 0		:: integer(),			%% Reporting period for LQR 1/100ths second
-	  endpoint = #epdisc{}		:: #epdisc{}			%% endpoint discriminator
-}).
 
 -record(state, {
 	  config			:: list(),
@@ -180,30 +155,31 @@ reqci(_StateName, Options, RejectIfDisagree,
     NewState = State#state{his_opts = HisOpts},
     {{Verdict, ReplyOpts1}, NewState}.
 
-up(State) ->
+up(State = #state{got_opts = GotOpts, his_opts = HisOpts}) ->
     io:format("~p: Up~n", [?MODULE]),
     %% Link is ready,
     %% set MRU, MMRU, ASyncMap and Compression options on Link
     %% Enable LCP Echos
     %% Set Link Up
-    State.
+    Reply = {up, GotOpts, HisOpts},
+    {Reply, State}.
 
 down(State) ->
     io:format("~p: Down~n", [?MODULE]),
     %% Disable LCP Echos
     %% Set Link Down
-    State.
+    {down, State}.
 
 starting(State) ->
     io:format("~p: Starting~n", [?MODULE]),
     %%link_required(f->unit);
-    State.
+    {starting, State}.
 
 
 finished(State) ->
     io:format("~p: Finished~n", [?MODULE]),
     %% link_terminated(f->unit);
-    State.
+    {terminated, State}.
 
 %%===================================================================
 %% Option Generation

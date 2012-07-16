@@ -139,7 +139,7 @@ fsm_lowerclose(FSM) ->
     gen_fsm:sync_send_all_state_event(FSM, {lower, close}).
 
 fsm_frame_in(FSM, Frame) when is_tuple(Frame) ->
-    gen_fsm:send_all_state_event(FSM, Frame).
+    gen_fsm:sync_send_all_state_event(FSM, Frame).
 
 %%--------------------------------------------------------------------
 start_link(Link, Config, ProtoMod) ->
@@ -193,24 +193,35 @@ init([Link, Config, ProtoMod]) ->
 %%       or Receive-Echo-Reply
 %%       or Receive-Discard-Request
 
+-define(IS_PROTOCOL_FRAME(Frame, State), (element(1, Frame) == State#state.protocol)).
+
 %% -- initial ----------------------------------------
+initial({timeout, _Ref, _Msg}, State) ->
+    %% drain spurious timeout
+    next_state(initial, State).
+
 initial(up, _From, State) ->
     reply(ok, closed, State);
 initial(open, _From, State) ->
-    State1 = this_layer_starting(State),
-    reply(ok, starting, State1);
+    {Reply, NewState} = this_layer_starting(State),
+    reply(Reply, starting, NewState);
 initial(close, _From, State) ->
+    reply(ok, initial, State);
+
+initial(Frame, _From, State)
+  when ?IS_PROTOCOL_FRAME(Frame, State) ->
+    ignore_frame_in(initial, Frame),
     reply(ok, initial, State);
 
 initial(Event, _From, State) ->
     invalid_event(initial, Event),
     reply({error, invalid}, initial, State).
 
-initial(Frame, State) ->
-    ignore_frame_in(initial, Frame),
-    next_state(initial, State).
-
 %% -- starting ---------------------------------------
+starting({timeout, _Ref, _Msg}, State) ->
+    %% drain spurious timeout
+    next_state(starting, State).
+
 starting(up, _From, State = #state{config = #fsm_config{silent = true}}) ->
     reply(ok, stopped, State);
 starting(up, _From, State = #state{config = #fsm_config{silent = false}}) ->
@@ -221,18 +232,23 @@ starting(up, _From, State = #state{config = #fsm_config{silent = false}}) ->
 starting(open, _From, State) ->
     reply(ok, starting, State);
 starting(close, _From, State) ->
-    State1 = this_layer_finished(State),
-    reply(ok, initial, State1);
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, initial, NewState);
+
+starting(Frame, _From, State)
+  when ?IS_PROTOCOL_FRAME(Frame, State) ->
+    ignore_frame_in(starting, Frame),
+    reply(ok, starting, State);
 
 starting(Event, _From, State) ->
     invalid_event(starting, Event),
     reply({error, invalid}, starting, State).
 
-starting(Frame, State) ->
-    ignore_frame_in(starting, Frame),
-    next_state(starting, State).
-
 %% -- closed -----------------------------------------
+closed({timeout, _Ref, _Msg}, State) ->
+    %% drain spurious timeout
+    next_state(closed, State).
+
 closed(down, _From, State) ->
     reply(ok, initial, State);
 closed(open, _From, State = #state{config = #fsm_config{silent = true}}) ->
@@ -245,141 +261,148 @@ closed(open, _From, State = #state{config = #fsm_config{silent = false}}) ->
 closed(close, _From, State) ->
     reply(ok, closed, State);
 
-closed(Event, _From, State) ->
-    invalid_event(closed, Event),
-    reply({error, invalid}, closed, State).
-
 %% RCR+, RCR-, RCA, RCN
-closed({_, Code, Id, _Options}, State)
+closed({_, Code, Id, _Options}, _From, State)
   when Code == 'CP-Configure-Request';
        Code == 'CP-Configure-Ack';
        Code == 'CP-Configure-Nak';
        Code == 'CP-Configure-Reject' ->
     %% Go away, we're closed
     NewState = send_terminate_ack(Id, <<>>, State),
-    next_state(closed, NewState);
+    reply(ok, closed, NewState);
 
 %% RTR
-closed({_, 'CP-Terminate-Request', Id, _Data}, State) ->
+closed({_, 'CP-Terminate-Request', Id, _Data}, _From, State) ->
     NewState = send_terminate_ack(Id, <<>>, State),
-    next_state(closed, NewState);
+    reply(ok, closed, NewState);
 
 %% RTA
-closed({_, 'CP-Terminate-Ack', _Id, _Data}, State) ->
-    next_state(closed, State);
+closed({_, 'CP-Terminate-Ack', _Id, _Data}, _From, State) ->
+    reply(ok, closed, State);
 
 %% %% RXJ+
-%% closed({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-%%     next_state(closed, State);
+%% closed({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+%%     reply(ok, closed, State);
 
 %% RXJ-
-closed({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(closed, NewState);
+closed({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, closed, NewState);
 
 %% %% RXJ+
-%% closed({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-%%     next_state(closed, State);
+%% closed({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+%%     reply(ok, closed, State);
 
 %% RXJ-
-closed({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(closed, NewState);
+closed({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, closed, NewState);
 
 %% RXR
-closed({_, 'CP-Discard-Request', _Id}, State) ->
-    next_state(closed, State);
+closed({_, 'CP-Discard-Request', _Id}, _From, State) ->
+    reply(ok, closed, State);
 
-%% RUC
-closed(Request, State) ->
-    NewState = send_code_reject(Request, State),
-    next_state(closed, NewState);
-
-closed(Frame, State) ->
+closed(Frame, _From, State)
+  when ?IS_PROTOCOL_FRAME(Frame, State) ->
     ignore_frame_in(closed, Frame),
-    next_state(closed, State).
+    reply(ok, closed, State);
+
+closed(Event, _From, State) ->
+    invalid_event(closed, Event),
+    reply({error, invalid}, closed, State).
 
 %% -- stopped ----------------------------------------
+stopped({timeout, _Ref, _Msg}, State) ->
+    %% drain spurious timeout
+    next_state(stopped, State).
+
 stopped(down, _From, State) ->
-    State1 = this_layer_starting(State),
-    reply(ok, starting, State1);
+    {Reply, NewState} = this_layer_starting(State),
+    reply(Reply, starting, NewState);
 stopped(open, _From, State) ->
 %% TODO:
 %%   [r]   Restart option; see Open event discussion.
     reply(ok, stopped, State);
 stopped(close, _From, State = #state{config = #fsm_config{silent = Silent, passive = Passive}})
   when Silent; Passive ->
-    NewState = this_layer_finished(State),
-    reply(ok, closed, NewState);
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, closed, NewState);
 stopped(close, _From, State) ->
     reply(ok, closed, State);
 
-stopped(Event, _From, State) ->
-    invalid_event(stopped, Event),
-    reply({error, invalid}, stopped, State).
-
 %% RCR+, RCR-
-stopped({_, 'CP-Configure-Request', Id, Options}, State) ->
+stopped({_, 'CP-Configure-Request', Id, Options}, _From, State) ->
     NewState0 = initialize_restart_count(State),
     NewState1 = cb_resetci(NewState0),
     NewState2 = send_configure_request(stopped, false, NewState1),
     {Verdict, NewState3} = handle_configure_request(stopped, Id, Options, NewState2),
     case Verdict of
 	ack ->
-	    next_state(ack_sent, NewState3);
+	    reply(ok, ack_sent, NewState3);
 	_ ->
-	    next_state(req_sent, NewState3)
+	    reply(ok, req_sent, NewState3)
     end;
 
 %% RCA, RCN
-stopped({_, Code, Id, _Options}, State)
+stopped({_, Code, Id, _Options}, _From, State)
   when Code == 'CP-Configure-Ack';
        Code == 'CP-Configure-Nak';
        Code == 'CP-Configure-Reject' ->
     NewState = send_terminate_ack(Id, <<>>, State),
-    next_state(stopped, NewState);
+    reply(ok, stopped, NewState);
 
 %% RTR
-stopped({_, 'CP-Terminate-Request', Id, _Data}, State) ->
+stopped({_, 'CP-Terminate-Request', Id, _Data}, _From, State) ->
     NewState = send_terminate_ack(Id, <<>>, State),
-    next_state(stopped, NewState);
+    reply(ok, stopped, NewState);
 
 %% RTA
-stopped({_, 'CP-Terminate-Ack', _Id, _Data}, State) ->
-    next_state(stopped, State);
+stopped({_, 'CP-Terminate-Ack', _Id, _Data}, _From, State) ->
+    reply(ok, stopped, State);
 
 %% %% RXJ+
-%% stopped({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-%%     next_state(stopped, State);
+%% stopped({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+%%     reply(ok, stopped, State);
 
 %% RXJ-
-stopped({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(stopped, NewState);
+stopped({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, stopped, NewState);
 
 %% %% RXJ+
-%% stopped({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-%%     next_state(stopped, State);
+%% stopped({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+%%     reply(ok, stopped, State);
 
 %% RXJ-
-stopped({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(stopped, NewState);
+stopped({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, stopped, NewState);
 
 %% RXR
-stopped({_, 'CP-Discard-Request', _Id}, State) ->
-    next_state(stopped, State);
+stopped({_, 'CP-Discard-Request', _Id}, _From, State) ->
+    reply(ok, stopped, State);
 
-%% RUC
-stopped(Request, State) ->
-    NewState = send_code_reject(Request, State),
-    next_state(stopped, NewState);
-
-stopped(Frame, State) ->
+stopped(Frame, _From, State)
+  when ?IS_PROTOCOL_FRAME(Frame, State) ->
     ignore_frame_in(stopped, Frame),
-    next_state(stopped, State).
+    reply(ok, stopped, State);
+
+stopped(Event, _From, State) ->
+    invalid_event(stopped, Event),
+    reply({error, invalid}, stopped, State).
 
 %% -- closing ----------------------------------------
+closing({timeout, _Ref, _Msg}, State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
+    case get_counter(LastRequest, State) of
+        Cnt when Cnt > 0 ->
+	    NewState = send_terminate_request(<<>>, State),
+	    next_state(closing, NewState);
+	0 ->
+	    {Reply, NewState} = this_layer_finished(State),
+	    ppp_link:layer_finished(Link, Protocol, Reply),
+	    next_state(closed, NewState)
+    end.
+
 closing(down, _From, State) ->
     reply(ok, initial, State);
 closing(open, _From, State) ->
@@ -389,70 +412,67 @@ closing(open, _From, State) ->
 closing(close, _From, State) ->
     reply(ok, closed, State);
 
-closing(Event, _From, State) ->
-    invalid_event(closing, Event),
-    reply({error, invalid}, closing, State).
-
-closing({timeout, _Ref, _Msg}, State = #state{last_request = LastRequest}) ->
-    case get_counter(LastRequest, State) of
-        Cnt when Cnt > 0 ->
-	    State1 = send_terminate_request(<<>>, State),
-	    next_state(closing, State1);
-	0 ->
-	    State1 = this_layer_finished(State),
-	    next_state(closed, State1)
-    end;
-
 %% RCR+, RCR-, RCA, RCN
-closing({_, Code, _Id, _Options}, State)
+closing({_, Code, _Id, _Options}, _From, State)
   when Code == 'CP-Configure-Request';
        Code == 'CP-Configure-Ack';
        Code == 'CP-Configure-Nak';
        Code == 'CP-Configure-Reject' ->
-    next_state(closing, State);
+    reply(ok, closing, State);
 
 %% RTR
-closing({_, 'CP-Terminate-Request', Id, _Data}, State) ->
+closing({_, 'CP-Terminate-Request', Id, _Data}, _From, State) ->
     NewState = send_terminate_ack(Id, <<>>, State),
-    next_state(closing, NewState);
+    reply(ok, closing, NewState);
 
 %% RTA
-closing({_, 'CP-Terminate-Ack', _Id, _Data}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(closed, NewState);
+closing({_, 'CP-Terminate-Ack', _Id, _Data}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, closed, NewState);
 
 %% %% RXJ+
-%% closing({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-%%     next_state(closing, State);
+%% closing({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+%%     reply(ok, closing, State);
 
 %% RXJ-
-closing({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(closed, NewState);
+closing({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, closed, NewState);
 
 %% %% RXJ+
-%% closing({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-%%     next_state(closing, State);
+%% closing({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+%%     reply(ok, closing, State);
 
 %% RXJ-
-closing({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(closed, NewState);
+closing({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, closed, NewState);
 
 %% RXR
-closing({_, 'CP-Discard-Request', _Id}, State) ->
-    next_state(closing, State);
+closing({_, 'CP-Discard-Request', _Id}, _From, State) ->
+    reply(ok, closing, State);
 
-%% RUC
-closing(Request, State) ->
-    NewState = send_code_reject(Request, State),
-    next_state(closing, NewState);
-
-closing(Frame, State) ->
+closing(Frame, _From, State)
+  when ?IS_PROTOCOL_FRAME(Frame, State) ->
     ignore_frame_in(closing, Frame),
-    next_state(closing, State).
+    reply(ok, closing, State);
+
+closing(Event, _From, State) ->
+    invalid_event(closing, Event),
+    reply({error, invalid}, closing, State).
 
 %% -- stopping ---------------------------------------
+stopping({timeout, _Ref, _Msg}, State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
+    case get_counter(LastRequest, State) of
+        Cnt when Cnt > 0 ->
+	    NewState = send_terminate_request(<<>>, State),
+	    next_state(stopping, NewState);
+	0 ->
+	    {Reply, NewState} = this_layer_finished(State),
+	    ppp_link:layer_finished(Link, Protocol, Reply),
+	    next_state(stopped, NewState)
+    end.
+
 stopping(down, _From, State) ->
     reply(ok, starting, State);
 stopping(open, _From, State) ->
@@ -462,70 +482,70 @@ stopping(open, _From, State) ->
 stopping(close, _From, State) ->
     reply(ok, closing, State);
 
-stopping(Event, _From, State) ->
-    invalid_event(stopping, Event),
-    reply({error, invalid}, stopping, State).
-
-stopping({timeout, _Ref, _Msg}, State = #state{last_request = LastRequest}) ->
-    case get_counter(LastRequest, State) of
-        Cnt when Cnt > 0 ->
-	    State1 = send_terminate_request(<<>>, State),
-	    next_state(stopping, State1);
-	0 ->
-	    State1 = this_layer_finished(State),
-	    next_state(stopped, State1)
-    end;
-
 %% RCR+, RCR-, RCA, RCN
-stopping({_, Code, _Id, _Options}, State)
+stopping({_, Code, _Id, _Options}, _From, State)
   when Code == 'CP-Configure-Request';
        Code == 'CP-Configure-Ack';
        Code == 'CP-Configure-Nak';
        Code == 'CP-Configure-Reject' ->
-    next_state(stopping, State);
+    reply(ok, stopping, State);
 
 %% RTR
-stopping({_, 'CP-Terminate-Request', Id, _Data}, State) ->
+stopping({_, 'CP-Terminate-Request', Id, _Data}, _From, State) ->
     NewState = send_terminate_ack(Id, <<>>, State),
-    next_state(stopping, NewState);
+    reply(ok, stopping, NewState);
 
 %% RTA
-stopping({_, 'CP-Terminate-Ack', _Id, _Data}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(stopped, NewState);
+stopping({_, 'CP-Terminate-Ack', _Id, _Data}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, stopped, NewState);
 
 %% %% RXJ+
-%% stopping({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-%%     next_state(stopping, State);
+%% stopping({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+%%     reply(ok, stopping, State);
 
 %% RXJ-
-stopping({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(stopped, NewState);
+stopping({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, stopped, NewState);
 
 %% %% RXJ+
-%% stopping({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-%%     next_state(stopping, State);
+%% stopping({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+%%     reply(ok, stopping, State);
 
 %% RXJ-
-stopping({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(closed, NewState);
+stopping({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, closed, NewState);
 
 %% RXR
-stopping({_, 'CP-Discard-Request', _Id}, State) ->
-    next_state(stopping, State);
+stopping({_, 'CP-Discard-Request', _Id}, _From, State) ->
+    reply(ok, stopping, State);
 
-%% RUC
-stopping(Request, State) ->
-    NewState = send_code_reject(Request, State),
-    next_state(stopping, NewState);
-
-stopping(Frame, State) ->
+stopping(Frame, _From, State)
+  when ?IS_PROTOCOL_FRAME(Frame, State) ->
     ignore_frame_in(stopping, Frame),
-    next_state(stopping, State).
+    reply(ok, stopping, State);
+
+stopping(Event, _From, State) ->
+    invalid_event(stopping, Event),
+    reply({error, invalid}, stopping, State).
 
 %% -- req_sent ---------------------------------------
+req_sent({timeout, _Ref, _Msg}, State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
+    case get_counter(LastRequest, State) of
+        Cnt when Cnt > 0 ->
+	    NewState = send_configure_request(req_sent, true, State),
+	    next_state(req_sent, NewState);
+	0 ->
+	    {Reply, NewState} = this_layer_finished(State),
+%% TODO:
+%%   [p]   Passive option; see Stopped state discussion.
+
+	    ppp_link:layer_finished(Link, Protocol, Reply),
+	    next_state(stopped, NewState)
+    end.
+
 req_sent(down, _From, State) ->
     reply(ok, starting, State);
 req_sent(open, _From, State) ->
@@ -535,90 +555,87 @@ req_sent(close, _From, State) ->
     State2 = send_terminate_request(<<>>, State1),
     reply(ok, closing, State2);
 
-req_sent(Event, _From, State) ->
-    invalid_event(req_sent, Event),
-    reply({error, invalid}, req_sent, State).
-
-req_sent({timeout, _Ref, _Msg}, State = #state{last_request = LastRequest}) ->
-    case get_counter(LastRequest, State) of
-        Cnt when Cnt > 0 ->
-	    State1 = send_configure_request(req_sent, true, State),
-	    next_state(req_sent, State1);
-	0 ->
-	    State1 = this_layer_finished(State),
-%% TODO:
-%%   [p]   Passive option; see Stopped state discussion.
-
-	    next_state(stopped, State1)
-    end;
-
 %% RCR+, RCR-
-req_sent({_, 'CP-Configure-Request', Id, Options}, State) ->
+req_sent({_, 'CP-Configure-Request', Id, Options}, _From, State) ->
     {Verdict, NewState} = handle_configure_request(req_sent, Id, Options, State),
     case Verdict of
 	ack ->
 	    %% RCR+
-	    next_state(ack_sent, NewState);
+	    reply(ok, ack_sent, NewState);
 	_ ->
 	    %% RCR-
-	    next_state(req_sent, NewState)
+	    reply(ok, req_sent, NewState)
     end;
 
 %% RCA
-req_sent({_, 'CP-Configure-Ack', _Id, _Options}, State) ->
+req_sent({_, 'CP-Configure-Ack', _Id, _Options}, _From, State) ->
     NewState = initialize_restart_count(State),
-    next_state(ack_rcvd, NewState);
+    reply(ok, ack_rcvd, NewState);
 
 %% RCN
-req_sent({_, Code, _Id, _Options}, State)
+req_sent({_, Code, _Id, _Options}, _From, State)
   when Code == 'CP-Configure-Nak';
        Code == 'CP-Configure-Reject' ->
     NewState0 = stop_timer(State),
     NewState1 = initialize_restart_count(NewState0),
     NewState2 = send_configure_request(req_sent, false, NewState1),
-    next_state(req_sent, NewState2);
+    reply(ok, req_sent, NewState2);
 
 %% RTR
-req_sent({_, 'CP-Terminate-Request', Id, Data}, State) ->
+req_sent({_, 'CP-Terminate-Request', Id, Data}, _From, State) ->
     NewState = send_terminate_ack(Id, Data, State),
-    next_state(req_sent, NewState);
+    reply(ok, req_sent, NewState);
 
 %% RTA
-req_sent({_, 'CP-Terminate-Ack', _Id, _Data}, State) ->
-    next_state(req_sent, State);
+req_sent({_, 'CP-Terminate-Ack', _Id, _Data}, _From, State) ->
+    reply(ok, req_sent, State);
 
 %% %% RXJ+
-%% req_sent({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-%%     next_state(req_sent, State);
+%% req_sent({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+%%     reply(ok, req_sent, State);
 
 %% RXJ-
-req_sent({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(stopped, NewState);
+req_sent({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, stopped, NewState);
 
 %% %% RXJ+
-%% req_sent({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-%%     next_state(req_sent, State);
+%% req_sent({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+%%     reply(ok, req_sent, State);
 
 %% RXJ-
-req_sent({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(stopped, NewState);
+req_sent({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, stopped, NewState);
 
 %% RXR
-req_sent({_, 'CP-Discard-Request', _Id}, State) ->
-    next_state(req_sent, State);
+req_sent({_, 'CP-Discard-Request', _Id}, _From, State) ->
+    reply(ok, req_sent, State);
 
-%% RUC
-req_sent(Request, State) ->
-    NewState = send_code_reject(Request, State),
-    next_state(req_sent, NewState);
-
-req_sent(Frame, State) ->
+req_sent(Frame, _From, State)
+  when ?IS_PROTOCOL_FRAME(Frame, State) ->
     ignore_frame_in(req_sent, Frame),
-    next_state(req_sent, State).
+    reply(ok, req_sent, State);
+
+req_sent(Event, _From, State) ->
+    invalid_event(req_sent, Event),
+    reply({error, invalid}, req_sent, State).
 
 %% -- ack_rcvd ---------------------------------------
+ack_rcvd({timeout, _Ref, _Msg}, State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
+    case get_counter(LastRequest, State) of
+        Cnt when Cnt > 0 ->
+	    NewState = send_configure_request(ack_rcvd, true, State),
+	    next_state(ack_rcvd, NewState);
+	0 ->
+	    {Reply, NewState} = this_layer_finished(State),
+%% TODO:
+%%   [p]   Passive option; see Stopped state discussion.
+
+	    ppp_link:layer_finished(Link, Protocol, Reply),
+	    next_state(stopped, NewState)
+    end.
+
 ack_rcvd(down, _From, State) ->
     reply(ok, starting, State);
 ack_rcvd(open, _From, State) ->
@@ -628,38 +645,21 @@ ack_rcvd(close, _From, State) ->
     State2 = send_terminate_request(<<>>, State1),
     reply(ok, closing, State2);
 
-ack_rcvd(Event, _From, State) ->
-    invalid_event(ack_rcvd, Event),
-    reply({error, invalid}, ack_rcvd, State).
-
-ack_rcvd({timeout, _Ref, _Msg}, State = #state{last_request = LastRequest}) ->
-    case get_counter(LastRequest, State) of
-        Cnt when Cnt > 0 ->
-	    State1 = send_configure_request(ack_rcvd, true, State),
-	    next_state(ack_rcvd, State1);
-	0 ->
-	    State1 = this_layer_finished(State),
-%% TODO:
-%%   [p]   Passive option; see Stopped state discussion.
-
-	    next_state(stopped, State1)
-    end;
-
 %% RCR+, RCR-
-ack_rcvd({_, 'CP-Configure-Request', Id, Options}, State) ->
+ack_rcvd({_, 'CP-Configure-Request', Id, Options}, _From, State) ->
     {Verdict, NewState0} = handle_configure_request(ack_rcvd, Id, Options, State),
     case Verdict of
 	ack ->
 	    %% RCR+
-	    NewState1 = this_layer_up(NewState0),
-	    next_state(opened, NewState1);
+	    {Reply, NewState1} = this_layer_up(NewState0),
+	    reply(Reply, opened, NewState1);
 	_ ->
 	    %% RCR-
-	    next_state(ack_rcvd, NewState0)
+	    reply(ok, ack_rcvd, NewState0)
     end;
 
 %% RCA, RCN
-ack_rcvd({_, Code, _Id, _Options}, State)
+ack_rcvd({_, Code, _Id, _Options}, _From, State)
   when Code == 'CP-Configure-Ack';
        Code == 'CP-Configure-Nak';
        Code == 'CP-Configure-Reject' ->
@@ -667,49 +667,63 @@ ack_rcvd({_, Code, _Id, _Options}, State)
 %%   [x]   Crossed connection; see RCA event discussion.
     NewState0 = stop_timer(State),
     NewState1 = send_configure_request(ack_rcvd, false, NewState0),
-    next_state(req_sent, NewState1);
+    reply(ok, req_sent, NewState1);
 
 %% RTR
-ack_rcvd({_, 'CP-Terminate-Request', Id, Data}, State) ->
+ack_rcvd({_, 'CP-Terminate-Request', Id, Data}, _From, State) ->
     NewState = send_terminate_ack(Id, Data, State),
-    next_state(req_sent, NewState);
+    reply(ok, req_sent, NewState);
 
 %% RTA
-ack_rcvd({_, 'CP-Terminate-Ack', _Id, _Data}, State) ->
-    next_state(req_sent, State);
+ack_rcvd({_, 'CP-Terminate-Ack', _Id, _Data}, _From, State) ->
+    reply(ok, req_sent, State);
 
 %% %% RXJ+
-%% ack_rcvd({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-%%     next_state(req_sent, State);
+%% ack_rcvd({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+%%     reply(ok, req_sent, State);
 
 %% RXJ-
-ack_rcvd({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(stopped, NewState);
+ack_rcvd({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, stopped, NewState);
 
 %% %% RXJ+
-%% ack_rcvd({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-%%     next_state(req_sent, State);
+%% ack_rcvd({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+%%     reply(ok, req_sent, State);
 
 %% RXJ-
-ack_rcvd({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(stopped, NewState);
+ack_rcvd({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, stopped, NewState);
 
 %% RXR
-ack_rcvd({_, 'CP-Discard-Request', _Id}, State) ->
-    next_state(ack_rcvd, State);
+ack_rcvd({_, 'CP-Discard-Request', _Id}, _From, State) ->
+    reply(ok, ack_rcvd, State);
 
-%% RUC
-ack_rcvd(Request, State) ->
-    NewState = send_code_reject(Request, State),
-    next_state(ack_rcvd, NewState);
-
-ack_rcvd(Frame, State) ->
+ack_rcvd(Frame, _From, State)
+  when ?IS_PROTOCOL_FRAME(Frame, State) ->
     ignore_frame_in(ack_rcvd, Frame),
-    next_state(ack_rcvd, State).
+    reply(ok, ack_rcvd, State);
+
+ack_rcvd(Event, _From, State) ->
+    invalid_event(ack_rcvd, Event),
+    reply({error, invalid}, ack_rcvd, State).
 
 %% -- ack_sent ---------------------------------------
+ack_sent({timeout, _Ref, _Msg}, State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
+    case get_counter(LastRequest, State) of
+        Cnt when Cnt > 0 ->
+	    NewState = send_configure_request(ack_sent, true, State),
+	    next_state(ack_sent, NewState);
+	0 ->
+	    {Reply, NewState} = this_layer_finished(State),
+%% TODO:
+%%   [p]   Passive option; see Stopped state discussion.
+
+	    ppp_link:layer_finished(Link, Protocol, Reply),
+	    next_state(stopped, NewState)
+    end.
+
 ack_sent(down, _From, State) ->
     reply(ok, starting, State);
 ack_sent(open, _From, State) ->
@@ -719,95 +733,82 @@ ack_sent(close, _From, State) ->
     State2 = send_terminate_request(<<>>, State1),
     reply(ok, closing, State2);
 
-ack_sent(Event, _From, State) ->
-    invalid_event(ack_sent, Event),
-    reply({error, invalid}, ack_sent, State).
-
-ack_sent({timeout, _Ref, _Msg}, State = #state{last_request = LastRequest}) ->
-    case get_counter(LastRequest, State) of
-        Cnt when Cnt > 0 ->
-	    State1 = send_configure_request(ack_sent, true, State),
-	    next_state(ack_sent, State1);
-	0 ->
-	    State1 = this_layer_finished(State),
-%% TODO:
-%%   [p]   Passive option; see Stopped state discussion.
-
-	    next_state(stopped, State1)
-    end;
-
 %% RCR+, RCR-
-ack_sent({_, 'CP-Configure-Request', Id, Options}, State) ->
+ack_sent({_, 'CP-Configure-Request', Id, Options}, _From, State) ->
     {Verdict, NewState0} = handle_configure_request(ack_sent, Id, Options, State),
     case Verdict of
 	ack ->
 	    %% RCR+
 	    NewState1 = send_configure_ack(Id, Options, NewState0),
-	    next_state(ack_sent, NewState1);
+	    reply(ok, ack_sent, NewState1);
 	_ ->
 	    %% RCR-
-	    next_state(req_sent, NewState0)
+	    reply(ok, req_sent, NewState0)
     end;
 
 %% RCA
-ack_sent({_, 'CP-Configure-Ack', _Id, _Options}, State) ->
+ack_sent({_, 'CP-Configure-Ack', _Id, _Options}, _From, State) ->
     NewState0 = initialize_restart_count(State),
-    NewState1 = this_layer_up(NewState0),
-    next_state(opened, NewState1);
+    {Reply, NewState1} = this_layer_up(NewState0),
+    reply(Reply, opened, NewState1);
 
 %% RCN
-ack_sent({_, Code, _Id, _Options}, State)
+ack_sent({_, Code, _Id, _Options}, _From, State)
   when Code == 'CP-Configure-Nak';
        Code == 'CP-Configure-Reject' ->
     NewState0 = stop_timer(State),
     NewState1 = initialize_restart_count(NewState0),
     NewState2 = send_configure_request(ack_sent, false, NewState1),
-    next_state(ack_sent, NewState2);
+    reply(ok, ack_sent, NewState2);
 
 %% RTR
-ack_sent({_, 'CP-Terminate-Request', Id, Data}, State) ->
+ack_sent({_, 'CP-Terminate-Request', Id, Data}, _From, State) ->
     NewState = send_terminate_ack(Id, Data, State),
-    next_state(req_sent, NewState);
+    reply(ok, req_sent, NewState);
 
 %% RTA
-ack_sent({_, 'CP-Terminate-Ack', _Id, _Data}, State) ->
-    next_state(ack_sent, State);
+ack_sent({_, 'CP-Terminate-Ack', _Id, _Data}, _From, State) ->
+    reply(ok, ack_sent, State);
 
 %% %% RXJ+
-%% ack_sent({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-%%     next_state(ack_sent, State);
+%% ack_sent({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+%%     reply(ok, ack_sent, State);
 
 %% RXJ-
-ack_sent({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(stopped, NewState);
+ack_sent({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, stopped, NewState);
 
 %% %% RXJ+
-%% ack_sent({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-%%     next_state(ack_sent, State);
+%% ack_sent({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+%%     reply(ok, ack_sent, State);
 
 %% RXJ-
-ack_sent({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-    NewState = this_layer_finished(State),
-    next_state(stopped, NewState);
+ack_sent({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+    {Reply, NewState} = this_layer_finished(State),
+    reply(Reply, stopped, NewState);
 
 %% RXR
-ack_sent({_, 'CP-Discard-Request', _Id}, State) ->
-    next_state(ack_sent, State);
+ack_sent({_, 'CP-Discard-Request', _Id}, _From, State) ->
+    reply(ok, ack_sent, State);
 
-%% RUC
-ack_sent(Request, State) ->
-    NewState = send_code_reject(Request, State),
-    next_state(ack_sent, NewState);
-
-ack_sent(Frame, State) ->
+ack_sent(Frame, _From, State)
+  when ?IS_PROTOCOL_FRAME(Frame, State) ->
     ignore_frame_in(ack_sent, Frame),
-    next_state(ack_sent, State).
+    reply(ok, ack_sent, State);
+
+ack_sent(Event, _From, State) ->
+    invalid_event(ack_sent, Event),
+    reply({error, invalid}, ack_sent, State).
 
 %% -- opened -----------------------------------------
+opened({timeout, _Ref, _Msg}, State) ->
+    %% drain spurious timeout
+    next_state(opened, State).
+
 opened(down, _From, State) ->
-    State1 = this_layer_down(State),
-    reply(ok, starting, State1);
+    {Reply, NewState} = this_layer_down(State),
+    reply(Reply, starting, NewState);
 opened(open, _From, State) ->
 %% TODO:
 %%   [r]   Restart option; see Open event discussion.
@@ -817,89 +818,85 @@ opened(close, _From, State) ->
     State2 = send_terminate_request(<<>>, State1),
     reply(ok, closing, State2);
 
-opened(Event, _From, State) ->
-    invalid_event(opened, Event),
-    reply({error, invalid}, opened, State).
-
 %% RCR+, RCR-
-opened({_, 'CP-Configure-Request', Id, Options}, State) ->
-    NewState0 = this_layer_down(State),
+opened({_, 'CP-Configure-Request', Id, Options}, _From, State) ->
+    {Reply, NewState0} = this_layer_down(State),
     NewState1 = cb_resetci(NewState0),
     NewState2 = send_configure_request(opened, false, NewState1),
     {Verdict, NewState3} = handle_configure_request(opened, Id, Options, NewState2),
     case Verdict of
 	ack ->
 	    %% RCR+
-	    next_state(ack_sent, NewState3);
+	    reply(Reply, ack_sent, NewState3);
 	_ ->
 	    %% RCR-
-	    next_state(req_sent, NewState3)
+	    reply(Reply, req_sent, NewState3)
     end;
 
 %% RCA, RCN
-opened({_, Code, _Id, _Options}, State)
+opened({_, Code, _Id, _Options}, _From, State)
   when Code == 'CP-Configure-Ack';
        Code == 'CP-Configure-Nak';
        Code == 'CP-Configure-Reject' ->
-    NewState0 = this_layer_down(State),
+    {Reply, NewState0} = this_layer_down(State),
     NewState1 = cb_resetci(NewState0),
     NewState2 = send_configure_request(opened, false, NewState1),
 %% TODO:
 %%   [x]   Crossed connection; see RCA event discussion.
-    next_state(req_sent, NewState2);
+    reply(Reply, req_sent, NewState2);
 
 %% RTR
-opened({_, 'CP-Terminate-Request', Id, Data}, State) ->
-    NewState0 = this_layer_down(State),
+opened({_, 'CP-Terminate-Request', Id, Data}, _From, State) ->
+    {Reply, NewState0} = this_layer_down(State),
     NewState1 = zero_restart_count(NewState0),
     NewState2 = send_terminate_ack(Id, Data, NewState1),
-    next_state(stopping, NewState2);
+    reply(Reply, stopping, NewState2);
 
 %% RTA
-opened({_, 'CP-Terminate-Ack', _Id, _Data}, State) ->
-    NewState0 = this_layer_down(State),
+opened({_, 'CP-Terminate-Ack', _Id, _Data}, _From, State) ->
+    {Reply, NewState0} = this_layer_down(State),
     NewState1 = cb_resetci(NewState0),
     NewState2 = send_configure_request(opened, false, NewState1),
-    next_state(req_sent, NewState2);
+    reply(Reply, req_sent, NewState2);
 
 %% %% RXJ+
-%% opened({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-%%     next_state(opened, State);
+%% opened({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+%%     reply(ok, opened, State);
 
 %% RXJ-
-opened({_, 'CP-Code-Reject', _Id, _RejectedPacket}, State) ->
-    NewState0 = this_layer_down(State),
+opened({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
+    {Reply, NewState0} = this_layer_down(State),
     NewState1 = initialize_restart_count(NewState0),
     NewState2 = send_terminate_request(<<>>, NewState1),
-    next_state(stopping, NewState2);
+    reply(Reply, stopping, NewState2);
 
 %% %% RXJ+
-%% opened({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-%%     next_state(opened, State);
+%% opened({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+%%     reply(ok, opened, State);
 
 %% RXJ-
-opened({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, State) ->
-    NewState0 = this_layer_down(State),
+opened({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+    {Reply, NewState0} = this_layer_down(State),
     NewState1 = initialize_restart_count(NewState0),
     NewState2 = send_terminate_request(<<>>, NewState1),
-    next_state(stopping, NewState2);
+    reply(Reply, stopping, NewState2);
 
 %% RXR
-opened({_, 'CP-Discard-Request', _Id}, State) ->
-    next_state(opened, State);
+opened({_, 'CP-Discard-Request', _Id}, _From, State) ->
+    reply(ok, opened, State);
 
-opened({_, 'CP-Echo-Request', Id, Data}, State) ->
+opened({_, 'CP-Echo-Request', Id, Data}, _From, State) ->
     NewState = send_echo_reply(Id, Data, State),
-    next_state(opened, NewState);
+    reply(ok, opened, NewState);
 
-%% RUC
-opened(Request, State) ->
-    NewState = send_code_reject(Request, State),
-    next_state(opened, NewState);
-
-opened(Frame, State) ->
+opened(Frame, _From, State)
+  when ?IS_PROTOCOL_FRAME(Frame, State) ->
     ignore_frame_in(opened, Frame),
-    next_state(opened, State).
+    reply(ok, opened, State);
+
+opened(Event, _From, State) ->
+    invalid_event(opened, Event),
+    reply({error, invalid}, opened, State).
 
 %% ---------------------------------------------------
 %% special in context callback from protocol module
@@ -914,43 +911,68 @@ handler_lower_event(Event, {From, StateName, State}, ProtoState) ->
 
 %% ---------------------------------------------------
 
-handle_event(Msg = {Protocol, 'CP-Configure-Ack', Id, Options},
-	     StateName, State = #state{protocol = Protocol}) ->
-    case handle_configure_ack(StateName, Id, Options, State) of
-	false ->
-	    io:format("Ignoring ~p in state ~p~n", [Msg, StateName]),
-	    next_state(StateName, State);
-	NewState ->
-	    ?MODULE:StateName(Msg, NewState)
-    end;
-
-handle_event(Msg = {Protocol, 'CP-Configure-Nak', Id, Options},
-	     StateName, State = #state{protocol = Protocol}) ->
-    case handle_configure_nak(StateName, Id, Options, State) of
-	false ->
-	    io:format("Ignoring ~p in state ~p~n", [Msg, StateName]),
-	    next_state(StateName, State);
-	NewState ->
-	    ?MODULE:StateName(Msg, NewState)
-    end;
-
-handle_event(Msg = {Protocol, 'CP-Configure-Reject', Id, Options},
-	     StateName, State = #state{protocol = Protocol}) ->
-    case handle_configure_rej(StateName, Id, Options, State) of
-	false ->
-	    io:format("Ignoring ~p in state ~p~n", [Msg, StateName]),
-	    next_state(StateName, State);
-	NewState ->
-	    ?MODULE:StateName(Msg, NewState)
-    end;
-
-handle_event(Msg, StateName, State = #state{protocol = Protocol})
-  when element(1, Msg) == Protocol ->
-    ?MODULE:StateName(Msg, State);
+%% make code check a bit more readable
+-define(IS_BASE_CODE(Code), (Code == 'CP-VendorSpecific' orelse
+			     Code == 'CP-Configure-Request' orelse
+			     Code == 'CP-Configure-Ack' orelse
+			     Code == 'CP-Configure-Nak' orelse
+			     Code == 'CP-Configure-Reject' orelse
+			     Code == 'CP-Terminate-Request' orelse
+			     Code == 'CP-Terminate-Ack' orelse
+			     Code == 'CP-Code-Reject' orelse
+			     Code == 'CP-Protocol-Reject' orelse
+			     Code == 'CP-Echo-Request' orelse
+			     Code == 'CP-Echo-Reply' orelse
+			     Code == 'CP-Discard-Request' orelse
+			     Code == 'CP-Identification' orelse
+			     Code == 'CP-Time-Remaining' orelse
+			     Code == 'CP-Reset-Request' orelse
+			     Code == 'CP-Reset-Reply')).
 
 handle_event(Event, StateName, State) ->
     io:format("Event: ~p~n", [Event]),
     next_state(StateName, State).
+
+handle_sync_event(Msg = {Protocol, 'CP-Configure-Ack', Id, Options},
+	     From, StateName, State = #state{protocol = Protocol}) ->
+    case handle_configure_ack(StateName, Id, Options, State) of
+	false ->
+	    io:format("Ignoring ~p in state ~p~n", [Msg, StateName]),
+	    reply(ok, StateName, State);
+	NewState ->
+	    ?MODULE:StateName(Msg, From, NewState)
+    end;
+
+handle_sync_event(Msg = {Protocol, 'CP-Configure-Nak', Id, Options},
+	     From, StateName, State = #state{protocol = Protocol}) ->
+    case handle_configure_nak(StateName, Id, Options, State) of
+	false ->
+	    io:format("Ignoring ~p in state ~p~n", [Msg, StateName]),
+	    reply(ok, StateName, State);
+	NewState ->
+	    ?MODULE:StateName(Msg, From, NewState)
+    end;
+
+handle_sync_event(Msg = {Protocol, 'CP-Configure-Reject', Id, Options},
+	     From, StateName, State = #state{protocol = Protocol}) ->
+    case handle_configure_rej(StateName, Id, Options, State) of
+	false ->
+	    io:format("Ignoring ~p in state ~p~n", [Msg, StateName]),
+	    reply(ok, StateName, State);
+	NewState ->
+	    ?MODULE:StateName(Msg, From, NewState)
+    end;
+
+handle_sync_event(Msg, From, StateName, State)
+  when ?IS_PROTOCOL_FRAME(Msg, State) andalso ?IS_BASE_CODE(element(2, Msg)) ->
+    ?MODULE:StateName(Msg, From, State);
+
+%% RUC
+handle_sync_event(Msg, _From, StateName, State)
+  when  ?IS_PROTOCOL_FRAME(Msg, State) ->
+%% TODO: let the CallBack Module handle extended codes....
+    NewState = send_code_reject(Msg, State),
+    reply(ok, StateName, NewState);
 
 handle_sync_event({lower, Event}, From, StateName, State) ->
     lower_event(Event, From, StateName, State);
@@ -990,17 +1012,22 @@ callback0(Cb, State = #state{protocol_mod = ProtoMod, protocol_state = ProtoStat
     NewProtoState = ProtoMod:Cb(ProtoState),
     State#state{protocol_state = NewProtoState}.
 
+layer_callback0(Cb, State = #state{protocol_mod = ProtoMod, protocol_state = ProtoState}) ->
+    {Reply, NewProtoState} = ProtoMod:Cb(ProtoState),
+    NewState = State#state{protocol_state = NewProtoState},
+    {Reply, NewState}.
+
 cb_up(State) ->
-    callback0(up, State).
+    layer_callback0(up, State).
 
 cb_down(State) ->
-    callback0(down, State).
+    layer_callback0(down, State).
 
 cb_starting(State) ->
-    callback0(starting, State).
+    layer_callback0(starting, State).
 
 cb_finished(State) ->
-    callback0(finished, State).
+    layer_callback0(finished, State).
 
 cb_resetci(State) ->
     callback0(resetci, State).
