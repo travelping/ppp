@@ -16,4 +16,4 @@
 -callback loweropen(FSM :: pid()) -> ok.
 
 %% Close the protocol
--callback lowerclose(FSM :: pid()) -> ok.
+-callback lowerclose(FSM :: pid(), Reason :: binary()) -> ok.

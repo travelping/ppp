@@ -4,7 +4,7 @@
 
 %% API
 -export([start_link/3]).
--export([fsm_frame_in/2, fsm_lowerup/1, fsm_lowerdown/1, fsm_loweropen/1, fsm_lowerclose/1]).
+-export([fsm_frame_in/2, fsm_lowerup/1, fsm_lowerdown/1, fsm_loweropen/1, fsm_lowerclose/2]).
 
 -include("ppp_fsm.hrl").
 
@@ -135,8 +135,8 @@ fsm_lowerdown(FSM) ->
 fsm_loweropen(FSM) ->
     gen_fsm:sync_send_all_state_event(FSM, {lower, open}).
 
-fsm_lowerclose(FSM) ->
-    gen_fsm:sync_send_all_state_event(FSM, {lower, close}).
+fsm_lowerclose(FSM, Reason) ->
+    gen_fsm:sync_send_all_state_event(FSM, {lower, {close, Reason}}).
 
 fsm_frame_in(FSM, Frame) when is_tuple(Frame) ->
     gen_fsm:sync_send_all_state_event(FSM, Frame).
@@ -205,7 +205,7 @@ initial(up, _From, State) ->
 initial(open, _From, State) ->
     {Reply, NewState} = this_layer_starting(State),
     reply(Reply, starting, NewState);
-initial(close, _From, State) ->
+initial({close, _}, _From, State) ->
     reply(ok, initial, State);
 
 initial(Frame, _From, State)
@@ -231,7 +231,7 @@ starting(up, _From, State = #state{config = #fsm_config{silent = false}}) ->
     reply(ok, req_sent, NewState2);
 starting(open, _From, State) ->
     reply(ok, starting, State);
-starting(close, _From, State) ->
+starting({close, _}, _From, State) ->
     {Reply, NewState} = this_layer_finished(State),
     reply(Reply, initial, NewState);
 
@@ -258,7 +258,7 @@ closed(open, _From, State = #state{config = #fsm_config{silent = false}}) ->
     NewState1 = cb_resetci(NewState0),
     NewState3 = send_configure_request(closed, false, NewState1),
     reply(ok, req_sent, NewState3);
-closed(close, _From, State) ->
+closed({close, _}, _From, State) ->
     reply(ok, closed, State);
 
 %% RCR+, RCR-, RCA, RCN
@@ -323,7 +323,7 @@ stopped(open, _From, State) ->
 %% TODO:
 %%   [r]   Restart option; see Open event discussion.
     reply(ok, stopped, State);
-stopped(close, _From, State = #state{config = #fsm_config{silent = Silent, passive = Passive}})
+stopped({close, _}, _From, State = #state{config = #fsm_config{silent = Silent, passive = Passive}})
   when Silent; Passive ->
     {Reply, NewState} = this_layer_finished(State),
     reply(Reply, closed, NewState);
@@ -409,7 +409,7 @@ closing(open, _From, State) ->
 %% TODO:
 %%   [r]   Restart option; see Open event discussion.
     reply(ok, stopping, State);
-closing(close, _From, State) ->
+closing({close, _}, _From, State) ->
     reply(ok, closed, State);
 
 %% RCR+, RCR-, RCA, RCN
@@ -479,7 +479,7 @@ stopping(open, _From, State) ->
 %% TODO:
 %%   [r]   Restart option; see Open event discussion.
     reply(ok, stopping, State);
-stopping(close, _From, State) ->
+stopping({close, _}, _From, State) ->
     reply(ok, closing, State);
 
 %% RCR+, RCR-, RCA, RCN
@@ -550,9 +550,9 @@ req_sent(down, _From, State) ->
     reply(ok, starting, State);
 req_sent(open, _From, State) ->
     reply(ok, req_sent, State);
-req_sent(close, _From, State) ->
+req_sent({close, Reason}, _From, State) ->
     State1 = initialize_restart_count(State),
-    State2 = send_terminate_request(<<>>, State1),
+    State2 = send_terminate_request(Reason, State1),
     reply(ok, closing, State2);
 
 %% RCR+, RCR-
@@ -640,9 +640,9 @@ ack_rcvd(down, _From, State) ->
     reply(ok, starting, State);
 ack_rcvd(open, _From, State) ->
     reply(ok, ack_rcvd, State);
-ack_rcvd(close, _From, State) ->
+ack_rcvd({close, Reason}, _From, State) ->
     State1 = initialize_restart_count(State),
-    State2 = send_terminate_request(<<>>, State1),
+    State2 = send_terminate_request(Reason, State1),
     reply(ok, closing, State2);
 
 %% RCR+, RCR-
@@ -728,9 +728,9 @@ ack_sent(down, _From, State) ->
     reply(ok, starting, State);
 ack_sent(open, _From, State) ->
     reply(ok, ack_sent, State);
-ack_sent(close, _From, State) ->
+ack_sent({close, Reason}, _From, State) ->
     State1 = initialize_restart_count(State),
-    State2 = send_terminate_request(<<>>, State1),
+    State2 = send_terminate_request(Reason, State1),
     reply(ok, closing, State2);
 
 %% RCR+, RCR-
@@ -813,9 +813,9 @@ opened(open, _From, State) ->
 %% TODO:
 %%   [r]   Restart option; see Open event discussion.
     reply(ok, opened, State);
-opened(close, _From, State) ->
+opened({close, Reason}, _From, State) ->
     State1 = initialize_restart_count(State),
-    State2 = send_terminate_request(<<>>, State1),
+    State2 = send_terminate_request(Reason, State1),
     reply(ok, closing, State2);
 
 %% RCR+, RCR-

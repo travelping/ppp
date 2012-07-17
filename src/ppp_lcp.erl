@@ -5,7 +5,7 @@
 
 %% API
 -export([start_link/2]).
--export([frame_in/2, lowerup/1, lowerdown/1, loweropen/1, lowerclose/1]).
+-export([frame_in/2, lowerup/1, lowerdown/1, loweropen/1, lowerclose/2]).
 
 %% ppp_fsm callbacks
 -export([init/2, up/1, down/1, starting/1, finished/1]).
@@ -52,8 +52,8 @@ lowerdown(FSM) ->
 loweropen(FSM) ->
     ppp_fsm:fsm_loweropen(FSM).
 
-lowerclose(FSM) ->
-    ppp_fsm:fsm_lowerclose(FSM).
+lowerclose(FSM, Reason) ->
+    ppp_fsm:fsm_lowerclose(FSM, Reason).
 
 frame_in(FSM, Frame) ->
     ppp_fsm:fsm_frame_in(FSM, Frame).
