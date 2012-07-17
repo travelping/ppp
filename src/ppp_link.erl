@@ -10,7 +10,7 @@
 
 %% gen_fsm callbacks
 -export([init/1,
-	 establish/2, auth/2,
+	 establish/2, auth/2, terminating/2,
 	 handle_event/3, handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 
 -include("ppp_lcp.hrl").
@@ -23,6 +23,9 @@
 	  pap			:: pid(), 			%% PAP protocol driver
 
 	  auth_required = true	:: boolean,
+	  auth_pending = []	:: [atom()],
+
+	  peerid = <<>>		:: binary(),
 
 	  our_lcp_opts		:: #lcp_opts{}, 		%% Options that peer ack'd
 	  his_lcp_opts		:: #lcp_opts{}			%% Options that we ack'd
@@ -82,8 +85,8 @@ establish({packet_in, Frame}, State = #state{lcp = LCP})
 		OurOpts#lcp_opts.neg_auth /= [] orelse
 		HisOpts#lcp_opts.neg_auth /= [] ->
 		    lowerup(auth, NewState0),
-		    NewState1 = do_authpeer(OurOpts#lcp_opts.neg_auth, NewState0),
-		    NewState2 = do_authwithpeer(HisOpts#lcp_opts.neg_auth, NewState1),
+		    NewState1 = do_auth_peer(OurOpts#lcp_opts.neg_auth, NewState0),
+		    NewState2 = do_auth_withpeer(HisOpts#lcp_opts.neg_auth, NewState1),
 		    {next_state, auth, NewState2};
 		true ->
 		    lowerup(network, NewState0),
@@ -104,7 +107,7 @@ auth({packet_in, Frame}, State = #state{lcp = LCP})
     case ppp_lcp:frame_in(LCP, Frame) of
  	down ->
 	    NewState = State#state{our_lcp_opts = undefined, his_lcp_opts = undefined},
-	    {next_state, establish, NewState};
+	    {next_state, terminating, NewState};
 	Reply ->
 	    io:format("LCP got: ~p~n", [Reply]),
 	    {next_state, auth, State}
@@ -115,12 +118,30 @@ auth({packet_in, Frame}, State = #state{pap = PAP})
   when element(1, Frame) == pap ->
     io:format("PAP Frame: ~p~n", [Frame]),
     Reply = ppp_pap:frame_in(PAP, Frame),
-    io:format("PAP got: ~p~n", [Reply]),
-    {next_state, auth, State};
+    io:format("PAP in phase auth got: ~p~n", [Reply]),
+    case Reply of
+	ok ->
+	    {next_state, auth, State};
+	_ when is_tuple(Reply) ->
+	    auth_reply(Reply, State)
+    end;
 
 auth({packet_in, Frame}, State) ->
     io:format("non-Auth Frame: ~p, ignoring~n", [Frame]),
     {next_state, auth, State}.
+
+terminating({packet_in, Frame}, State = #state{lcp = LCP})
+  when element(1, Frame) == lcp ->
+    io:format("LCP Frame: ~p~n", [Frame]),
+    case ppp_lcp:frame_in(LCP, Frame) of
+	terminated ->
+	    io:format("LCP in phase terminating got: terminated~n"),
+	    %% TODO: might want to restart LCP.....
+	    {stop, normal, State};
+	Reply ->
+	    io:format("LCP in phase terminating got: ~p~n", [Reply]),
+	    {next_state, terminating, State}
+    end.
 
 handle_event({packet_out, Frame}, StateName, State = #state{transport = Transport}) ->
     transport_send(Transport, Frame),
@@ -164,14 +185,42 @@ lowerdown(auth, #state{pap = PAP}) ->
 lowerdown(network, #state{}) ->
     ok.
 
-do_authpeer([], State) ->
+do_auth_peer([], State) ->
     State;
-do_authpeer([pap|_], State = #state{pap = PAP}) ->
-    ppp_pap:authpeer(PAP),
-    State.
+do_auth_peer([pap|_], State = #state{auth_pending = Pending, pap = PAP}) ->
+    ppp_pap:auth_peer(PAP),
+    State#state{auth_pending = [auth_peer|Pending]}.
 
-do_authwithpeer([], State) ->
+do_auth_withpeer([], State) ->
     State;
-do_authwithpeer([pap|_], State = #state{pap = PAP}) ->
-    ppp_pap:authwithpeer(PAP, <<"">>, <<"">>),
-    State.
+do_auth_withpeer([pap|_], State = #state{auth_pending = Pending, pap = PAP}) ->
+    ppp_pap:auth_withpeer(PAP, <<"">>, <<"">>),
+    State#state{auth_pending = [auth_withpeer|Pending]}.
+
+auth_success(Direction, State = #state{auth_pending = Pending}) ->
+    NewState = State#state{auth_pending = proplists:delete(Direction, Pending)},
+    if
+	NewState#state.auth_pending == [] ->
+	    lowerup(network, NewState),
+	    {next_state, network, NewState};
+	true ->
+	    {next_state, auth, NewState}
+    end.
+
+auth_reply({auth_peer, success, PeerId}, State) ->
+    NewState = State#state{peerid = PeerId},
+    auth_success(auth_peer, NewState);
+
+auth_reply({auth_peer, fail}, State) ->
+    lcp_close(<<"Authentication failed">>, State);
+    
+auth_reply({auth_withpeer, success}, State) ->
+      auth_success(auth_withpeer, State);
+  
+auth_reply({auth_withpeer, fail}, State) ->
+    lcp_close(<<"Failed to authenticate ourselves to peer">>, State).
+
+lcp_close(Msg, State = #state{lcp = LCP}) ->
+    Reply = ppp_lcp:lowerclose(LCP, Msg),
+    io:format("LCP close got: ~p~n", [Reply]),
+    {next_state, terminating, State}.

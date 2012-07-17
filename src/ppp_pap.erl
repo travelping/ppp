@@ -5,8 +5,8 @@
 
 %% API
 -export([start_link/2]).
--export([frame_in/2, lowerup/1, lowerdown/1, loweropen/1, lowerclose/1, protrej/1]).
--export([authpeer/1, authwithpeer/3]).
+-export([frame_in/2, lowerup/1, lowerdown/1, loweropen/1, lowerclose/2, protrej/1]).
+-export([auth_peer/1, auth_withpeer/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -74,7 +74,7 @@ lowerdown(FSM) ->
 loweropen(_FSM) ->
     ok.
 
-lowerclose(_FSM) ->
+lowerclose(_FSM, _Reason) ->
     ok.
 
 protrej(FSM) ->
@@ -88,12 +88,12 @@ frame_in(FSM, Frame) ->
 %%%===================================================================
 
 %% Authenticate our peer (start server).
-authpeer(FSM) ->
-    gen_server:call(FSM, authpeer).
+auth_peer(FSM) ->
+    gen_server:call(FSM, auth_peer).
 
 %% Authenticate us with our peer (start client).
-authwithpeer(FSM, UserName, Password) ->
-    gen_server:call(FSM, {authwithpeer, UserName, Password}).
+auth_withpeer(FSM, UserName, Password) ->
+    gen_server:call(FSM, {auth_withpeer, UserName, Password}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -125,12 +125,12 @@ handle_call(Frame = {pap, Code, _, _}, _From, State)
     io:format("~p(~p): got ~p~n", [?MODULE, ?LINE, Frame]),
     fsm_client_call(Frame, State);
 
-handle_call(authpeer, _From, State) ->
-    fsm_server_call(authpeer, State);
+handle_call(auth_peer, _From, State) ->
+    fsm_server_call(auth_peer, State);
 
-handle_call({authwithpeer, UserName, Password}, _From, State) ->
+handle_call({auth_withpeer, UserName, Password}, _From, State) ->
     NewState = State#state{username = UserName, passwd = Password},
-    fsm_client_call(authwithpeer, NewState);
+    fsm_client_call(auth_withpeer, NewState);
 
 handle_call(protrej, _From, State) ->
     {_, NewState0} = fsm_client_call(protrej, State),
@@ -180,7 +180,7 @@ c_initial(lowerup, State) ->
     {reply, ok, c_closed, State};
 c_initial(lowerdown, State) ->
     {reply, ok, c_initial, State};
-c_initial(authwithpeer, State) ->
+c_initial(auth_withpeer, State) ->
     {reply, ok, c_pending, State};
 c_initial(_Msg, State) ->
     {reply, ok, c_initial, State}.
@@ -190,7 +190,7 @@ c_initial(_Msg, State) ->
 %%
 c_closed(lowerdown, State) ->
     {reply, ok, c_initial, State};
-c_closed(authwithpeer, State) ->
+c_closed(auth_withpeer, State) ->
     NewState = send_authentication_request(State),
     {reply, ok, c_authreq, NewState};
 c_closed(_Msg, State) ->
@@ -204,7 +204,7 @@ c_pending(lowerup, State) ->
     {reply, ok, c_authreq, NewState};
 c_pending(lowerdown, State) ->
     {reply, ok, c_initial, State};
-c_pending(authwithpeer, State) ->
+c_pending(auth_withpeer, State) ->
     {reply, ok, c_pending, State};
 c_pending(_Msg, State) ->
     {reply, ok, c_pending, State}.
@@ -218,7 +218,7 @@ c_authreq(lowerdown, State) ->
 
 c_authreq(protrej, State) ->
     %% error("PAP authentication failed due to protocol-reject");
-    {reply, {pap, auth_withpeer, fail}, c_authreq, State};
+    {reply, {auth_withpeer, fail}, c_authreq, State};
 
 c_authreq(timeout, State = #state{
 		     link = Link,
@@ -235,12 +235,12 @@ c_authreq(timeout, State) ->
 
 c_authreq({pap, 'PAP-Authenticate-Ack', _Id, Msg}, State) ->
     io:format("PAP: ~p~n", [Msg]),
-    {reply, {pap, auth_withpeer, success}, c_open, State};
+    {reply, {auth_withpeer, success}, c_open, State};
 
 c_authreq({pap, 'PAP-Authenticate-Nak', _Id, Msg}, State) ->
     %% error("PAP authentication failed");
     io:format("PAP: ~p~n", [Msg]),
-    {reply, {pap, auth_withpeer, fail}, c_badauth, State};
+    {reply, {auth_withpeer, fail}, c_badauth, State};
 
 c_authreq(_Msg, State) ->
     {reply, ok, c_authreq, State}.
@@ -270,7 +270,7 @@ s_initial(lowerup, State) ->
     {reply, ok, s_closed, State};
 s_initial(lowerdown, State) ->
     {reply, ok, s_initial, State};
-s_initial(authpeer, State) ->
+s_initial(auth_peer, State) ->
     {reply, ok, s_pending, State};
 s_initial(_Msg, State) ->
     {reply, ok, s_initial, State}.
@@ -278,7 +278,7 @@ s_initial(_Msg, State) ->
 %% Connection up haven't requested auth
 s_closed(lowerdown, State) ->
     {reply, ok, s_initial, State};
-s_closed(authpeer, State) ->
+s_closed(auth_peer, State) ->
     NewState = rearm_s_timer(State),
     {reply, ok, s_listen, NewState};
 s_closed(_Msg, State) ->
@@ -290,7 +290,7 @@ s_pending(lowerup, State) ->
     {reply, ok, s_listen, NewState};
 s_pending(lowerdown, State) ->
     {reply, ok, s_initial, State};
-s_pending(authpeer, State) ->
+s_pending(auth_peer, State) ->
     {reply, ok, s_pending, State};
 s_pending(_Msg, State) ->
     {reply, ok, s_pending, State}.
@@ -301,7 +301,7 @@ s_listen(lowerdown, State) ->
     {reply, ok, s_initial, NewState};
 s_listen(protrej, State) ->
     %% error("PAP authentication of peer failed (protocol-reject)");
-    {reply, {pap, auth_peer, fail}, s_listen, State};
+    {reply, {auth_peer, fail}, s_listen, State};
 s_listen(timeout, State = #state{link = Link}) ->
     ppp_link:auth_peer(Link, pap, fail),
     {reply, ok, s_badauth, State};
@@ -312,11 +312,11 @@ s_listen({pap, 'PAP-Authentication-Request', Id, PeerId, Passwd}, State) ->
 	success ->
 	    %% notice("PAP peer authentication succeeded for %q", rhostname);
 	    NewState1 = send_authentication_ack(Id, <<"">>, NewState0),
-	    {reply, {pap, auth_peer, success, PeerId}, s_open, NewState1};
+	    {reply, {auth_peer, success, PeerId}, s_open, NewState1};
 	_ ->
 	    %% warn("PAP peer authentication failed for %q", rhostname);
 	    NewState1 = send_authentication_nak(Id, <<"">>, NewState0),
-	    {reply, {pap, auth_peer, fail}, s_badauth, NewState1}
+	    {reply, {auth_peer, fail}, s_badauth, NewState1}
     end;
 
 s_listen(_Msg, State) ->
@@ -405,7 +405,7 @@ link_send(Link, Data) ->
     ppp_link:send(Link, Data).
 
 send_packet(Packet, State = #state{link = Link}) ->
-    io:format("Sending: ~p~n", [Packet]),
+    io:format("PAP Sending: ~p~n", [Packet]),
     Data = ppp_frame:encode(Packet),
     link_send(Link, Data),
     State.
