@@ -1,10 +1,10 @@
 -module(ppp_frame).
 
--export([decode/1, encode/1, decode_cp_options/1, encode_cp_options/1]).
+-export([decode/1, encode/1]).
 
 -compile(bin_opt_info).
 -compile(inline).
--compile({inline,[decode_lcp/3, decode_cp_option/2]}).
+-compile({inline,[decode_lcp/3, decode_lcp_option/2, decode_ipcp_option/2]}).
 
 -define(PPP_IP,          16#21).	%% Internet Protocol
 -define(PPP_AT,          16#29).	%% AppleTalk Protocol
@@ -25,6 +25,10 @@
 -define(PPP_CHAP,        16#c223).	%% Cryptographic Handshake Auth. Protocol
 -define(PPP_CBCP,        16#c029).	%% Callback Control Protocol
 -define(PPP_EAP,         16#c227).	%% Extensible Authentication Protocol
+
+-define(IPCP_VJC_COMP,   16#2d).	%% Van Jacobson Compressed TCP/IP		[RFC1144][RFC1332]
+-define(IPCP_IPH_COMP,   16#61).	%% Robust Header Compression (ROHC) 		[RFC3241]
+-define(IPCP_ROG_COMP,   16#03).	%% IP Header Compression			[RFC2507][RFC3544]
 
 -define('CP-VendorSpecific',    0).
 -define('CP-Configure-Request', 1).							%% [RFC1661]
@@ -107,6 +111,14 @@ chap_md_type(129)		-> 'MS-CHAP-v2'.
 -define(CI_EPDISC,       19).	%% endpoint discriminator				[RFC1990]
 -define(CI_LDISC,        23).	%% Link-Discriminator					[RFC2125]
 
+-define(CI_ADDRS,		1).		%% IP Addresses				[RFC1332]
+-define(CI_COMPRESSTYPE,	2).		%% Compression Type			[RFC1332]
+-define(CI_ADDR,		3).		%% IP-Address				[RFC1332]
+-define(CI_MS_DNS1,		129).		%% Primary DNS value			[RFC1877]
+-define(CI_MS_WINS1,		130).		%% Primary WINS value			[RFC1877]
+-define(CI_MS_DNS2,		131).		%% Secondary DNS value			[RFC1877]
+-define(CI_MS_WINS2,		132).		%% Secondary WINS value			[RFC1877]
+
 -define('PAP-Authentication-Request', 1).
 -define('PAP-Authenticate-Ack',       2).
 -define('PAP-Authenticate-Nak',       3).
@@ -135,8 +147,10 @@ chap_code('CHAP-Failure')    -> ?'CHAP-Failure'.
 decode(<<?PPP_IP:8/integer, Info/binary>>) ->
     {ipv4, Info};
 
-decode(<<?PPP_IPCP:16/integer, Info/binary>>) ->
-    {ipcp, Info};
+decode(<<?PPP_IPCP:16/integer, Code:8/integer, Id:8/integer, Length:16/integer, Rest/binary>>) ->
+    DataLen = Length - 4,
+    <<Data:DataLen/bytes, _Pad/binary>> = Rest,
+    decode_ipcp(Data, Id, Code);
 
 decode(<<?PPP_LCP:16/integer, Code:8/integer, Id:8/integer, Length:16/integer, Rest/binary>>) ->
     DataLen = Length - 4,
@@ -162,7 +176,7 @@ encode({lcp, Code, Id, Options})
        Code == 'CP-Configure-Ack';
        Code == 'CP-Configure-Nak';
        Code == 'CP-Configure-Reject' ->
-    Data = encode_cp_options(Options),
+    Data = encode_lcp_options(Options),
     encode(<<?PPP_LCP:16>>, cp_code(Code), Id, Data);
 encode({lcp, Code, Id, Data})
   when Code == 'CP-Terminate-Request';
@@ -207,14 +221,33 @@ encode({chap, Code, Id, Value, Name})
 encode({chap, Code, Id, Msg})
   when Code == 'CHAP-Success';
        Code == 'CHAP-Failure' ->
-    encode(<<?PPP_CHAP:16>>, chap_code(Code), Id, Msg).
+    encode(<<?PPP_CHAP:16>>, chap_code(Code), Id, Msg);
+
+encode({ipcp, Code, Id, Options})
+  when Code == 'CP-Configure-Request';
+       Code == 'CP-Configure-Ack';
+       Code == 'CP-Configure-Nak';
+       Code == 'CP-Configure-Reject' ->
+    Data = encode_ipcp_options(Options),
+    encode(<<?PPP_IPCP:16>>, cp_code(Code), Id, Data);
+encode({ipcp, Code, Id, Data})
+  when Code == 'CP-Terminate-Request';
+       Code == 'CP-Terminate-Ack' ->
+    encode(<<?PPP_IPCP:16>>, cp_code(Code), Id, Data);
+encode({ipcp, 'CP-Code-Reject', Id, RejectedPacket}) when is_binary(RejectedPacket)->
+    encode(<<?PPP_IPCP:16>>, ?'CP-Code-Reject', Id, RejectedPacket);
+encode({ipcp, 'CP-Code-Reject', Id, RejectedPacket}) ->
+    BinRejectedPacket = encode(RejectedPacket),
+    encode(<<?PPP_IPCP:16>>, ?'CP-Code-Reject', Id, BinRejectedPacket);
+encode({ipcp, 'CP-Protocol-Reject', Id, RejectedProtocol, RejectedInfo}) ->
+    encode(<<?PPP_IPCP:16>>, ?'CP-Protocol-Reject', Id, <<RejectedProtocol:16, RejectedInfo/binary>>).
 
 decode_lcp(Data, Id, Code)
   when Code == ?'CP-Configure-Request';
        Code == ?'CP-Configure-Ack';
        Code == ?'CP-Configure-Nak';
        Code == ?'CP-Configure-Reject' ->
-    {lcp, cp_code(Code), Id, decode_cp_options(Data)};
+    {lcp, cp_code(Code), Id, decode_lcp_options(Data)};
 decode_lcp(Data, Id, Code)
   when Code == ?'CP-Terminate-Request';
        Code == ?'CP-Terminate-Ack' ->
@@ -254,95 +287,176 @@ decode_chap(<<ValueSize:8/integer, Rest/binary>>, Id, Code)
     <<Value:ValueSize/bytes, Name/binary>> = Rest,
     {chap, chap_code(Code), Id, Value, Name}.
 
-decode_cp_option(<<MRU:16/integer>>, ?CI_MRU) ->
+decode_ipcp(Data, Id, Code)
+  when Code == ?'CP-Configure-Request';
+       Code == ?'CP-Configure-Ack';
+       Code == ?'CP-Configure-Nak';
+       Code == ?'CP-Configure-Reject' ->
+    {ipcp, cp_code(Code), Id, decode_ipcp_options(Data)};
+decode_ipcp(Data, Id, Code)
+  when Code == ?'CP-Terminate-Request';
+       Code == ?'CP-Terminate-Ack' ->
+    {ipcp, cp_code(Code), Id, Data};
+decode_ipcp(RejectedPacket, Id, ?'CP-Code-Reject') ->
+    {ipcp, 'CP-Code-Reject', Id, RejectedPacket};
+decode_ipcp(<<RejectedProtocol:16/integer, RejectedInfo/binary>>, Id, ?'CP-Protocol-Reject') ->
+    {ipcp, 'CP-Protocol-Reject', Id, RejectedProtocol, RejectedInfo}.
+
+decode_lcp_option(<<MRU:16/integer>>, ?CI_MRU) ->
     {mru, MRU};
-decode_cp_option(<<ACCM:32/integer>>, ?CI_ASYNCMAP) ->
+decode_lcp_option(<<ACCM:32/integer>>, ?CI_ASYNCMAP) ->
     {asyncmap, ACCM};
-decode_cp_option(<<Auth:16/integer>>, ?CI_AUTHTYPE)
+decode_lcp_option(<<Auth:16/integer>>, ?CI_AUTHTYPE)
   when Auth == ?PPP_EAP; Auth == ?PPP_PAP ->
     {auth, cp_auth_protocol(Auth), none};
-decode_cp_option(<<Auth:16/integer, MDType:8/integer>>, ?CI_AUTHTYPE)
+decode_lcp_option(<<Auth:16/integer, MDType:8/integer>>, ?CI_AUTHTYPE)
   when Auth == ?PPP_CHAP ->
     {auth, cp_auth_protocol(Auth), chap_md_type(MDType)};
-decode_cp_option(<<QP:16/integer, Period:32/integer>>, ?CI_QUALITY) ->
+decode_lcp_option(<<QP:16/integer, Period:32/integer>>, ?CI_QUALITY) ->
     {quality, QP, Period};
-decode_cp_option(<<Magic:32/integer>>, ?CI_MAGICNUMBER) ->
+decode_lcp_option(<<Magic:32/integer>>, ?CI_MAGICNUMBER) ->
     {magic, Magic};
-decode_cp_option(<<>>, ?CI_PCOMPRESSION) ->
+decode_lcp_option(<<>>, ?CI_PCOMPRESSION) ->
     pfc;
-decode_cp_option(<<>>, ?CI_ACCOMPRESSION) ->
+decode_lcp_option(<<>>, ?CI_ACCOMPRESSION) ->
     acfc;
-decode_cp_option(<<Op:8/integer, Message/binary>>, ?CI_CALLBACK) ->
+decode_lcp_option(<<Op:8/integer, Message/binary>>, ?CI_CALLBACK) ->
     {callback, Op, Message};
-decode_cp_option(<<MRRU:16/integer>>, ?CI_MRRU) ->
+decode_lcp_option(<<MRRU:16/integer>>, ?CI_MRRU) ->
     {mrru, MRRU};
-decode_cp_option(<<>>, ?CI_SSNHF) ->
+decode_lcp_option(<<>>, ?CI_SSNHF) ->
     ssnhf;
-decode_cp_option(<<Class:8/integer, Address/binary>>, ?CI_EPDISC) ->
+decode_lcp_option(<<Class:8/integer, Address/binary>>, ?CI_EPDISC) ->
     {epdisc, Class, Address};
-decode_cp_option(<<LDisc:16/integer>>, ?CI_LDISC) ->
+decode_lcp_option(<<LDisc:16/integer>>, ?CI_LDISC) ->
     {ldisc, LDisc};
 
-decode_cp_option(Data, Type) ->
+decode_lcp_option(Data, Type) ->
     {Type, Data}.
 
-decode_cp_options(Options) ->
-    decode_cp_options(Options, []).
+decode_lcp_options(Options) ->
+    decode_lcp_options(Options, []).
 
-decode_cp_options(<<>>, Acc) ->
+decode_lcp_options(<<>>, Acc) ->
     lists:reverse(Acc);
 
 %% variable length options decoding
-decode_cp_options(Data = <<Type:8/integer, Length:8/integer, Rest/binary>>, Acc) ->
+decode_lcp_options(Data = <<Type:8/integer, Length:8/integer, Rest/binary>>, Acc) ->
     PayLoadLen = Length - 2,
     case Rest of
 	<<PayLoad:PayLoadLen/binary, Next/binary>> ->
-	    Opt = decode_cp_option(PayLoad, Type),
-	    decode_cp_options(Next, [Opt|Acc]);
+	    Opt = decode_lcp_option(PayLoad, Type),
+	    decode_lcp_options(Next, [Opt|Acc]);
+	_ ->
+	    %% invalid Length value
+	    {raw, Data}
+    end.
+
+decode_ipcp_option(Addresses, ?CI_ADDRS) ->
+    {addresses, Addresses};
+decode_ipcp_option(<<?PPP_VJC_COMP:16/integer, MaxSlotId:8/integer, CompSlotId:8/integer>> ,?CI_COMPRESSTYPE) ->
+    {compresstype, vjc, MaxSlotId, CompSlotId};
+decode_ipcp_option(<<Addr:4/bytes>>, ?CI_ADDR) ->
+    {addr, Addr};
+decode_ipcp_option(<<Addr:4/bytes>>, ?CI_MS_DNS1) ->
+    {ms_dns1, Addr};
+decode_ipcp_option(<<Addr:4/bytes>>, ?CI_MS_WINS1) ->
+    {ms_wins1, Addr};
+decode_ipcp_option(<<Addr:4/bytes>>, ?CI_MS_DNS2) ->
+    {ms_dns2, Addr};
+decode_ipcp_option(<<Addr:4/bytes>>, ?CI_MS_WINS2) ->
+    {ms_wins2, Addr};
+decode_ipcp_option(Data, Type) ->
+    {Type, Data}.
+
+decode_ipcp_options(Options) ->
+    decode_ipcp_options(Options, []).
+
+decode_ipcp_options(<<>>, Acc) ->
+    lists:reverse(Acc);
+
+%% variable length options decoding
+decode_ipcp_options(Data = <<Type:8/integer, Length:8/integer, Rest/binary>>, Acc) ->
+    PayLoadLen = Length - 2,
+    case Rest of
+	<<PayLoad:PayLoadLen/binary, Next/binary>> ->
+	    Opt = decode_ipcp_option(PayLoad, Type),
+	    decode_ipcp_options(Next, [Opt|Acc]);
 	_ ->
 	    %% invalid Length value
 	    {raw, Data}
     end.
 
 %% encode options
-encode_cp_option(Type, Data) ->
+encode_lcp_option(Type, Data) ->
     Length = size(Data) + 2,
     <<Type:8, Length:8, Data/binary>>.
 
 %% allow empty list elements to simplify contructing the option list
-encode_cp_option([]) ->
+encode_lcp_option([]) ->
     <<>>;
-encode_cp_option({mru, MRU}) ->
-    encode_cp_option(?CI_MRU, <<MRU:16/integer>>);
-encode_cp_option({asyncmap, ACCM}) ->
-    encode_cp_option(?CI_ASYNCMAP, <<ACCM:32/integer>>);
-encode_cp_option({auth, Auth, _})
+encode_lcp_option({mru, MRU}) ->
+    encode_lcp_option(?CI_MRU, <<MRU:16/integer>>);
+encode_lcp_option({asyncmap, ACCM}) ->
+    encode_lcp_option(?CI_ASYNCMAP, <<ACCM:32/integer>>);
+encode_lcp_option({auth, Auth, _})
 when Auth == eap; Auth == pap ->
-    encode_cp_option(?CI_AUTHTYPE, <<(cp_auth_protocol(Auth)):16/integer>>);
-encode_cp_option({auth, Auth, MDType})
+    encode_lcp_option(?CI_AUTHTYPE, <<(cp_auth_protocol(Auth)):16/integer>>);
+encode_lcp_option({auth, Auth, MDType})
   when Auth == chap ->
-    encode_cp_option(?CI_AUTHTYPE, <<(cp_auth_protocol(Auth)):16/integer, (chap_md_type(MDType)):8/integer>>);
-encode_cp_option({quality, QP, Period}) ->
-    encode_cp_option(?CI_QUALITY, <<QP:16/integer, Period:32/integer>>);
-encode_cp_option({magic, Magic}) ->
-    encode_cp_option(?CI_MAGICNUMBER, <<Magic:32/integer>>);
-encode_cp_option(pfc) ->
-    encode_cp_option(?CI_PCOMPRESSION, <<>>);
-encode_cp_option(acfc) ->
-    encode_cp_option(?CI_ACCOMPRESSION, <<>>);
-encode_cp_option({callback, Op, Message}) ->
-    encode_cp_option(?CI_CALLBACK, <<Op:8/integer, Message/binary>>);
-encode_cp_option({mrru, MRRU}) ->
-    encode_cp_option(?CI_MRRU, <<MRRU:16/integer>>);
-encode_cp_option(ssnhf) ->
-    encode_cp_option(?CI_SSNHF, <<>>);
-encode_cp_option({epdisc, Class, Address}) ->
-    encode_cp_option(?CI_EPDISC, <<Class:8/integer, Address/binary>>);
-encode_cp_option({ldisc, LDisc}) ->
-    encode_cp_option(?CI_LDISC, <<LDisc:16/integer>>);
+    encode_lcp_option(?CI_AUTHTYPE, <<(cp_auth_protocol(Auth)):16/integer, (chap_md_type(MDType)):8/integer>>);
+encode_lcp_option({quality, QP, Period}) ->
+    encode_lcp_option(?CI_QUALITY, <<QP:16/integer, Period:32/integer>>);
+encode_lcp_option({magic, Magic}) ->
+    encode_lcp_option(?CI_MAGICNUMBER, <<Magic:32/integer>>);
+encode_lcp_option(pfc) ->
+    encode_lcp_option(?CI_PCOMPRESSION, <<>>);
+encode_lcp_option(acfc) ->
+    encode_lcp_option(?CI_ACCOMPRESSION, <<>>);
+encode_lcp_option({callback, Op, Message}) ->
+    encode_lcp_option(?CI_CALLBACK, <<Op:8/integer, Message/binary>>);
+encode_lcp_option({mrru, MRRU}) ->
+    encode_lcp_option(?CI_MRRU, <<MRRU:16/integer>>);
+encode_lcp_option(ssnhf) ->
+    encode_lcp_option(?CI_SSNHF, <<>>);
+encode_lcp_option({epdisc, Class, Address}) ->
+    encode_lcp_option(?CI_EPDISC, <<Class:8/integer, Address/binary>>);
+encode_lcp_option({ldisc, LDisc}) ->
+    encode_lcp_option(?CI_LDISC, <<LDisc:16/integer>>);
 
-encode_cp_option({Type, Data}) ->
-    encode_cp_option(Type, Data).
+encode_lcp_option({Type, Data}) ->
+    encode_lcp_option(Type, Data).
 
-encode_cp_options(Options) ->
-    << <<(encode_cp_option(O))/binary>> || O <- Options >>.
+encode_lcp_options(Options) ->
+    << <<(encode_lcp_option(O))/binary>> || O <- Options >>.
+
+
+%% encode options
+encode_ipcp_option(Type, Data) ->
+    Length = size(Data) + 2,
+    <<Type:8, Length:8, Data/binary>>.
+
+%% allow empty list elements to simplify contructing the option list
+encode_ipcp_option([]) ->
+    <<>>;
+encode_ipcp_option({addresses, Addresses}) ->
+    encode_ipcp_option(?CI_ADDRS, Addresses);
+encode_ipcp_option({compresstype, vjc, MaxSlotId, CompSlotId}) ->
+    encode_ipcp_option(?CI_COMPRESSTYPE, <<?PPP_VJC_COMP:16, MaxSlotId:8, CompSlotId:8>>);
+encode_ipcp_option({addr, Addr}) ->
+    encode_ipcp_option(?CI_ADDR, Addr);
+encode_ipcp_option({ms_dns1, Addr}) ->
+    encode_ipcp_option(?CI_MS_DNS1, Addr);
+encode_ipcp_option({ms_wins1, Addr}) ->
+    encode_ipcp_option(?CI_MS_WINS1, Addr);
+encode_ipcp_option({ms_dns2, Addr}) ->
+    encode_ipcp_option(?CI_MS_DNS2, Addr);
+encode_ipcp_option({ms_wins2, Addr}) ->
+    encode_ipcp_option(?CI_MS_WINS2, Addr);
+
+encode_ipcp_option({Type, Data}) ->
+    encode_ipcp_option(Type, Data).
+
+encode_ipcp_options(Options) ->
+    << <<(encode_ipcp_option(O))/binary>> || O <- Options >>.
+
