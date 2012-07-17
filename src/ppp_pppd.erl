@@ -155,14 +155,18 @@ gen_opts() ->
      "nodeflate",
      "noccp",
      "novj",
-     "novjccomp"
+     "novjccomp",
+     "refuse-eap",
+     "refuse-chap",
+     "refuse-mschap",
+     "refuse-mschap-v2"
 ].
 
 role_opts(server) ->
     [
      "silent",
      "passive",
-     "noauth",
+     "auth",
      "ms-dns", "192.168.13.7",
      "192.168.13.54:192.168.54.1"
     ];
@@ -171,5 +175,6 @@ role_opts(client) ->
     [
      "noauth",
      "usepeerdns",
-     "user", "erlang"
+     "user", "erlang",
+     "password", "erlang"
     ].
