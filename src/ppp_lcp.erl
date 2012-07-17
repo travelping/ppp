@@ -413,7 +413,7 @@ lcp_nakci(_, _, _, _, _) ->
 suggest_md_type(Prefered, [_|Available]) ->
     case proplists:get_bool(Prefered, Available) of
 	true ->
-	    Prefered ++ proplists:delete(Prefered, Available);
+	    [Prefered|proplists:delete(Prefered, Available)];
 	false -> Available
     end.
 
@@ -537,8 +537,12 @@ lcp_ackci({auth, AckAuth, _}, #lcp_opts{neg_auth = GotAuth})
     proplists:get_bool(AckAuth, GotAuth);
 lcp_ackci({auth, AckAuth, AckMDType}, #lcp_opts{neg_auth = GotAuth})
   when AckAuth == chap ->
-    %% FIXME: this needs to be changed....
-    GotAuth == {AckAuth, AckMDType};
+    case GotAuth of
+	[{AckAuth, [AckMDType|_]}|_] ->
+	    true;
+	_ ->
+	    false
+    end;
 
 lcp_ackci({quality, AckQP, AckPeriod}, #lcp_opts{neg_lqr = GotIt, lqr_period = GotPeriod}) ->
     GotIt and (AckQP == ?PPP_LQR) and (AckPeriod == GotPeriod);
