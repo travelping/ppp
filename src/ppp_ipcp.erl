@@ -83,21 +83,64 @@ handler_lower_event(Event, FSMState, State) ->
     ppp_fsm:handler_lower_event(Event, FSMState, State).
 
 %% fsm callback
+opt_get_bool(Key, List, Default) ->
+    case proplists:get_value(Key, List) of
+	undefined -> Default;
+	true      -> true;
+	_         -> false
+    end.
+
+opt_vjslots(Config, State = #state{want_opts = WantOpts, allow_opts = AllowOpts}) ->
+    case proplists:get_value(vj_max_slots, Config, ?MAX_STATES - 1) of
+	Value when Value < ?MAX_STATES andalso Value >= 2 ->
+	    State#state{
+	      want_opts = WantOpts#ipcp_opts{maxslotindex = Value},
+	      allow_opts = AllowOpts#ipcp_opts{maxslotindex = Value}
+	     };
+	_ ->
+	    State
+    end.
+
+opt_addr(Key, Config) ->	    
+    case proplists:get_value(Key, Config, <<0,0,0,0>>) of
+	Addr when is_binary(Addr) ->
+	    {Addr, Addr};
+	Value = {Addr1, Addr2}
+	  when is_binary(Addr1),
+	       is_binary(Addr2) ->
+	    Value
+    end.
 
 init(Link, Config) ->
     WantOpts = #ipcp_opts{
-      neg_addr = true,
-      neg_vj = true,
+      neg_addr = not proplists:get_bool(ipcp_no_address, Config),
+      accept_local = proplists:get_bool(accept_local, Config),
+      accept_remote = proplists:get_bool(accept_remote, Config),
+      usepeerdns = proplists:get_bool(usepeerdns, Config),
+      neg_vj = opt_get_bool(vj, Config, true),
       vj_protocol = vjc,
       maxslotindex = ?MAX_STATES - 1,
-      vjcflag = true
+      vjcflag = opt_get_bool(vjccomp, Config, true),
+
+      ouraddr = proplists:get_value(ipcp_ouraddr, Config, <<0,0,0,0>>),
+      hisaddr = proplists:get_value(ipcp_hisaddr, Config, <<0,0,0,0>>)
      },
 
+    {Dns1, Dns2} = opt_addr(ms_dns, Config),
+    {Wins1, Wins2}  = opt_addr(ms_wins, Config),
     AllowOpts = #ipcp_opts{
-      neg_addr = true,
-      neg_vj = true,
-      vjcflag = true
+      neg_addr = not proplists:get_bool(ipcp_no_address, Config),
+      neg_vj = opt_get_bool(vj, Config, true),
+      vjcflag = opt_get_bool(vjccomp, Config, true),
+
+      dnsaddr1 = Dns1,
+      dnsaddr2 = Dns2,
+      winsaddr1 = Wins1,
+      winsaddr2 = Wins2
      },
+
+    State0 = #state{link = Link, config = Config, want_opts = WantOpts, allow_opts = AllowOpts},
+    State1 = opt_vjslots(Config, State0),
 
 %% TODO: apply config to want_opts and allow_opts
 
@@ -111,7 +154,7 @@ init(Link, Config) ->
       restart_timeout = proplists:get_value(ipcp_restart, Config, 3000)
      },
 
-    {ok, ipcp, FsmConfig, #state{link = Link, config = Config, want_opts = WantOpts, allow_opts = AllowOpts}}.
+    {ok, ipcp, FsmConfig, State1}.
 
 resetci(State = #state{want_opts = WantOpts, allow_opts = AllowOpts}) ->
     WantOpts1 = WantOpts#ipcp_opts{
@@ -155,21 +198,67 @@ rejci(StateName, Options, State = #state{got_opts = GotOpts}) ->
     end.
 
 reqci(_StateName, Options, RejectIfDisagree,
-      State = #state{got_opts = GotOpts, allow_opts = AllowedOpts}) ->
-    {{Verdict, ReplyOpts}, HisOpts} = process_reqcis(Options, RejectIfDisagree, AllowedOpts, GotOpts),
+      State = #state{want_opts = WantOpts, allow_opts = AllowedOpts}) ->
+    {{Verdict, ReplyOpts}, WantOptsNew, HisOpts} =
+	process_reqcis(Options, RejectIfDisagree, AllowedOpts, WantOpts),
     ReplyOpts1 = lists:reverse(ReplyOpts),
-    NewState = State#state{his_opts = HisOpts},
+    NewState = State#state{want_opts = WantOptsNew, his_opts = HisOpts},
     {{Verdict, ReplyOpts1}, NewState}.
 
-up(State = #state{got_opts = GotOpts, his_opts = HisOpts}) ->
+up(State) ->
     io:format("~p: Up~n", [?MODULE]),
+    up_validate_neg_addr(State).
+
+up_validate_neg_addr(State = #state{
+		       want_opts = WantOpts,
+		       got_opts = GotOpts,
+		       his_opts = HisOpts0}) ->
+    HisOpts1 = if not HisOpts0#ipcp_opts.neg_addr ->
+		       HisOpts0#ipcp_opts{hisaddr = WantOpts#ipcp_opts.hisaddr};
+		  true ->
+		       HisOpts0
+	       end,
+
+    if (not GotOpts#ipcp_opts.neg_addr) andalso
+       WantOpts#ipcp_opts.neg_addr andalso
+       WantOpts#ipcp_opts.ouraddr /= <<0,0,0,0>> ->
+        %% error("Peer refused to agree to our IP address");
+	    Reply = {close, <<"Refused our IP address">>},
+	    {Reply, State};
+
+       GotOpts#ipcp_opts.ouraddr == <<0,0,0,0>> ->
+	    Reply = {close, <<"Could not determine local IP address">>},
+	    {Reply, State};
+
+       HisOpts1#ipcp_opts.hisaddr == <<0,0,0,0>> ->
+	    Reply = {close, <<"Could not determine remote IP address">>},
+	    {Reply, State};
+
+       true ->
+	   up_validate_dns(State#state{his_opts = HisOpts1})
+    end.
+
+up_validate_dns(State = #state{
+		  got_opts = GotOpts0,
+		  his_opts = HisOpts}) ->
+
+    GotOpts1 = if not GotOpts0#ipcp_opts.req_dns1 ->
+		       GotOpts0#ipcp_opts{dnsaddr1 = <<0,0,0,0>>};
+		  true ->
+		       GotOpts0
+	       end,
+    GotOpts2 = if not GotOpts1#ipcp_opts.req_dns2 ->
+		       GotOpts1#ipcp_opts{dnsaddr2 = <<0,0,0,0>>};
+		  true ->
+		       GotOpts1
+	       end,
+    NewState = State#state{got_opts = GotOpts2},
 
     %% TODO:
-    %%  validate Options!
     %%  Apply Options
 
-    Reply = {up, GotOpts, HisOpts},
-    {Reply, State}.
+    Reply = {up, GotOpts2, HisOpts},
+    {Reply, NewState}.
 
 down(State) ->
     io:format("~p: Down~n", [?MODULE]),
@@ -461,9 +550,9 @@ ipcp_reqci({compresstype, ReqProto, ReqMaxSlotId, ReqCompSlotId},
 ipcp_reqci({addr, ReqHisAddr}, #ipcp_opts{neg_addr = true}, WantOpts, HisOpts) ->
     if 
 	(ReqHisAddr /= WantOpts#ipcp_opts.hisaddr) and
-	((ReqHisAddr /= <<0,0,0,0>>) or not (WantOpts#ipcp_opts.accept_remote)) ->
+	((ReqHisAddr == <<0,0,0,0>>) or not (WantOpts#ipcp_opts.accept_remote)) ->
 	    Verdict = {nack, {addr, WantOpts#ipcp_opts.hisaddr}},
-	    HisOptsNew = HisOpts,
+	    HisOptsNew = HisOpts#ipcp_opts{neg_addr = true, hisaddr = ReqHisAddr},
 	    WantOptsNew = WantOpts;
 	(ReqHisAddr == <<0,0,0,0>>) and (WantOpts#ipcp_opts.hisaddr == <<0,0,0,0>>) ->
 	    Verdict = rej,
@@ -520,13 +609,31 @@ ipcp_reqci(Req, _, WantOpts, HisOpts) ->
 process_reqcis(Options, RejectIfDisagree, AllowedOpts, WantOpts) ->
     process_reqcis(Options, RejectIfDisagree, AllowedOpts, WantOpts, #ipcp_opts{}, [], [], []).
 
-process_reqcis([], _RejectIfDisagree, _AllowedOpts, _WantOpts, HisOpts, AckReply, NackReply, RejReply) ->
+process_reqcis([], _RejectIfDisagree, _AllowedOpts, WantOpts, HisOpts, _AckReply, _NackReply, RejReply)
+  when length(RejReply) /= 0 ->
+    Reply = {rej, RejReply},
+    {Reply, WantOpts, HisOpts};
+
+%% If we aren't rejecting this packet, and we want to negotiate
+%% their address, and they didn't send their address, then we
+%% send a NAK with a CI_ADDR option appended.
+process_reqcis([], _RejectIfDisagree, _AllowedOpts, WantOpts, HisOpts, _AckReply, NackReply, _RejReply)
+  when not HisOpts#ipcp_opts.neg_addr and WantOpts#ipcp_opts.req_addr ->
+    if length(NackReply) /= 0 ->
+	    NewWantOpts = WantOpts;
+       true ->
+	    NewWantOpts = WantOpts#ipcp_opts{req_addr = false}     %% don't ask again
+    end,
+    Reply = {nack, [{addr, WantOpts#ipcp_opts.hisaddr}|NackReply]},
+    {Reply, NewWantOpts, HisOpts};
+    
+process_reqcis([], _RejectIfDisagree, _AllowedOpts, WantOpts, HisOpts, AckReply, NackReply, _RejReply) ->
     Reply = if
-		length(RejReply) /= 0 -> {rej, RejReply};
 		length(NackReply) /= 0 -> {nack, NackReply};
 		true -> {ack, AckReply}
 	    end,
-    {Reply, HisOpts};
+    {Reply, WantOpts, HisOpts};
+   
 
 process_reqcis([Opt|Options], RejectIfDisagree, AllowedOpts, WantOpts, HisOpts, AckReply, NAckReply, RejReply) ->
     {Verdict, WantOptsNew, HisOptsNew} = ipcp_reqci(Opt, AllowedOpts, WantOpts, HisOpts),
