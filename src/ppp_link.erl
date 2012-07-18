@@ -109,7 +109,12 @@ establish({packet_in, Frame}, State) ->
     %%   Any non-LCP packets received during this phase MUST be silently
     %%   discarded.
     io:format("non-LCP Frame in phase establish: ~p, ignoring~n", [Frame]),
-    {next_state, establish, State}.
+    {next_state, establish, State};
+
+establish({layer_finished, lcp, terminated}, State) ->
+    io:format("LCP in phase establish got: terminated~n"),
+    %% TODO: might want to restart LCP.....
+    {stop, normal, State}.
 
 auth({packet_in, Frame}, State = #state{lcp = LCP})
   when element(1, Frame) == lcp ->
@@ -251,7 +256,7 @@ auth_reply({auth_peer, fail}, State) ->
     lcp_close(<<"Authentication failed">>, State);
     
 auth_reply({auth_withpeer, success}, State) ->
-      auth_success(auth_withpeer, State);
+    auth_success(auth_withpeer, State);
   
 auth_reply({auth_withpeer, fail}, State) ->
     lcp_close(<<"Failed to authenticate ourselves to peer">>, State).
