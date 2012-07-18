@@ -69,7 +69,12 @@ start_link(TransportModule, TransportRef) ->
 
 init([Transport]) ->
     process_flag(trap_exit, true),
-    Config = [silent],
+    Config = [
+	      silent,
+	      {ipcp_hisaddr, <<10,0,0,2>>},
+	      {ipcp_ouraddr, <<10,0,0,1>>},
+	      {ms_dns, <<10,0,0,1>>}
+	     ],
 
     {ok, LCP} = ppp_lcp:start_link(self(), Config),
     {ok, PAP} = ppp_pap:start_link(self(), Config),
