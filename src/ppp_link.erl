@@ -85,7 +85,7 @@ init([Transport]) ->
 
 establish({packet_in, Frame}, State = #state{lcp = LCP})
   when element(1, Frame) == lcp ->
-    io:format("LCP Frame: ~p~n", [Frame]),
+    io:format("LCP Frame in phase establish: ~p~n", [Frame]),
     case ppp_lcp:frame_in(LCP, Frame) of
  	{up, OurOpts, HisOpts} ->
 	    NewState0 = State#state{our_lcp_opts = OurOpts, his_lcp_opts = HisOpts},
@@ -106,12 +106,15 @@ establish({packet_in, Frame}, State = #state{lcp = LCP})
     end;
 
 establish({packet_in, Frame}, State) ->
-    io:format("non-LCP Frame: ~p, ignoring~n", [Frame]),
+    %% RFC 1661, Sect. 3.4:
+    %%   Any non-LCP packets received during this phase MUST be silently
+    %%   discarded.
+    io:format("non-LCP Frame in phase establish: ~p, ignoring~n", [Frame]),
     {next_state, establish, State}.
 
 auth({packet_in, Frame}, State = #state{lcp = LCP})
   when element(1, Frame) == lcp ->
-    io:format("LCP Frame: ~p~n", [Frame]),
+    io:format("LCP Frame in phase auth: ~p~n", [Frame]),
     case ppp_lcp:frame_in(LCP, Frame) of
  	down ->
 	    NewState = State#state{our_lcp_opts = undefined, his_lcp_opts = undefined},
@@ -124,38 +127,43 @@ auth({packet_in, Frame}, State = #state{lcp = LCP})
 %% TODO: we might be able to start protocols on demand....
 auth({packet_in, Frame}, State = #state{pap = PAP})
   when element(1, Frame) == pap ->
-    io:format("PAP Frame: ~p~n", [Frame]),
-    Reply = ppp_pap:frame_in(PAP, Frame),
-    io:format("PAP in phase auth got: ~p~n", [Reply]),
-    case Reply of
+    io:format("PAP Frame in phase auth: ~p~n", [Frame]),
+    case ppp_pap:frame_in(PAP, Frame) of
 	ok ->
 	    {next_state, auth, State};
-	_ when is_tuple(Reply) ->
+	Reply when is_tuple(Reply) ->
+	    io:format("PAP in phase auth got: ~p~n", [Reply]),
 	    auth_reply(Reply, State)
     end;
 
 auth({packet_in, Frame}, State) ->
+    %% RFC 1661, Sect. 3.5:
+    %%   Only Link Control Protocol, authentication protocol, and link quality
+    %%   monitoring packets are allowed during this phase.  All other packets
+    %%   received during this phase MUST be silently discarded.
     io:format("non-Auth Frame: ~p, ignoring~n", [Frame]),
     {next_state, auth, State}.
 
 %% TODO: we might be able to start protocols on demand....
 network({packet_in, Frame}, State = #state{ipcp = IPCP})
   when element(1, Frame) == ipcp ->
-    io:format("IPCP Frame: ~p~n", [Frame]),
-    Reply = ppp_ipcp:frame_in(IPCP, Frame),
-    io:format("IPCP in phase network got: ~p~n", [Reply]),
-    case Reply of
+    io:format("IPCP Frame in phase network: ~p~n", [Frame]),
+    case ppp_ipcp:frame_in(IPCP, Frame) of
 	down ->
 	    np_finished(State);
 	ok ->
 	    {next_state, network, State};
-	_ when is_tuple(Reply) ->
+ 	{up, _OurOpts, _HisOpts} ->
+	    %% IP is open
+	    {next_state, network, State};
+	Reply when is_tuple(Reply) ->
+	    io:format("IPCP in phase network got: ~p~n", [Reply]),
 	    {next_state, network, State}
     end.
 
 terminating({packet_in, Frame}, State = #state{lcp = LCP})
   when element(1, Frame) == lcp ->
-    io:format("LCP Frame: ~p~n", [Frame]),
+    io:format("LCP Frame in phase terminating: ~p~n", [Frame]),
     case ppp_lcp:frame_in(LCP, Frame) of
 	terminated ->
 	    io:format("LCP in phase terminating got: terminated~n"),
