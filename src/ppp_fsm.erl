@@ -1226,7 +1226,8 @@ send_configure_request(StateName, Retransmit, State = #state{protocol = Protocol
 
     NewState1 = rearm_timer(NewState0),
     NewState2 = NewState1#state{reqid = NewId, last_request = 'Configure-Request'},
-    send_packet({Protocol, 'CP-Configure-Request', NewId, Options}, NewState2).
+    NewState3 = dec_counter('Configure-Request', NewState2),
+    send_packet({Protocol, 'CP-Configure-Request', NewId, Options}, NewState3).
 
 send_configure_ack(Id, Options, State = #state{protocol = Protocol}) ->
     send_packet({Protocol, 'CP-Configure-Ack', Id, Options}, State).
@@ -1241,7 +1242,8 @@ send_configure_reject(Id, Options, State = #state{protocol = Protocol}) ->
 send_terminate_request(Data, State = #state{protocol = Protocol, reqid = Id}) ->
     NewState0 = rearm_timer(State),
     NewState1 = NewState0#state{last_request = 'Terminate-Request'},
-    send_packet({Protocol, 'CP-Terminate-Request', Id + 1, Data}, NewState1#state{reqid = Id + 1}).
+    NewState2 = dec_counter('Terminate-Request', NewState1),
+    send_packet({Protocol, 'CP-Terminate-Request', Id + 1, Data}, NewState2#state{reqid = Id + 1}).
 
 send_terminate_ack(Id, Data, State = #state{protocol = Protocol}) ->
     send_packet({Protocol, 'CP-Terminate-Ack', Id, Data}, State).
