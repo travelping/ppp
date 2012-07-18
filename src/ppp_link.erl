@@ -97,8 +97,7 @@ establish({packet_in, Frame}, State = #state{lcp = LCP})
 		    NewState2 = do_auth_withpeer(HisOpts#lcp_opts.neg_auth, NewState1),
 		    {next_state, auth, NewState2};
 		true ->
-		    loweropen(NewState0),
-		    {next_state, network, NewState0}
+		    np_open(NewState0)
 	    end;
 	Reply ->
 	    io:format("LCP got: ~p~n", [Reply]),
@@ -213,10 +212,6 @@ lowerdown(#state{pap = PAP, ipcp = IPCP}) ->
     ppp_ipcp:lowerdown(IPCP),
     ok.
 
-loweropen(#state{ipcp = IPCP}) ->
-    ppp_ipcp:loweropen(IPCP),
-    ok.
-
 do_auth_peer([], State) ->
     State;
 do_auth_peer([pap|_], State = #state{auth_pending = Pending, pap = PAP}) ->
@@ -233,8 +228,7 @@ auth_success(Direction, State = #state{auth_pending = Pending}) ->
     NewState = State#state{auth_pending = proplists:delete(Direction, Pending)},
     if
 	NewState#state.auth_pending == [] ->
-	    loweropen(NewState),
-	    {next_state, network, NewState};
+	    np_open(NewState);
 	true ->
 	    {next_state, auth, NewState}
     end.
@@ -259,3 +253,8 @@ lcp_close(Msg, State = #state{lcp = LCP}) ->
 
 np_finished(State) ->
     lcp_close(<<"No network protocols running">>, State).
+
+np_open(State = #state{ipcp = IPCP}) ->
+    ppp_ipcp:loweropen(IPCP),
+    {next_state, network, State}.
+
