@@ -116,8 +116,7 @@ auth({packet_in, Frame}, State = #state{lcp = LCP})
     io:format("LCP Frame in phase auth: ~p~n", [Frame]),
     case ppp_lcp:frame_in(LCP, Frame) of
  	down ->
-	    NewState = State#state{our_lcp_opts = undefined, his_lcp_opts = undefined},
-	    {next_state, terminating, NewState};
+	    lcp_down(State);
 	Reply ->
 	    io:format("LCP got: ~p~n", [Reply]),
 	    {next_state, auth, State}
@@ -142,6 +141,17 @@ auth({packet_in, Frame}, State) ->
     %%   received during this phase MUST be silently discarded.
     io:format("non-Auth Frame: ~p, ignoring~n", [Frame]),
     {next_state, auth, State}.
+
+network({packet_in, Frame}, State = #state{lcp = LCP})
+  when element(1, Frame) == lcp ->
+    io:format("LCP Frame in phase network: ~p~n", [Frame]),
+    case ppp_lcp:frame_in(LCP, Frame) of
+ 	down ->
+	    lcp_down(State);
+	Reply ->
+	    io:format("LCP got: ~p~n", [Reply]),
+	    {next_state, network, State}
+    end;
 
 %% TODO: we might be able to start protocols on demand....
 network({packet_in, Frame}, State = #state{ipcp = IPCP})
@@ -245,6 +255,10 @@ auth_reply({auth_withpeer, success}, State) ->
   
 auth_reply({auth_withpeer, fail}, State) ->
     lcp_close(<<"Failed to authenticate ourselves to peer">>, State).
+
+lcp_down(State) ->
+    NewState = State#state{our_lcp_opts = undefined, his_lcp_opts = undefined},
+    {next_state, terminating, NewState}.
 
 lcp_close(Msg, State = #state{lcp = LCP}) ->
     Reply = ppp_lcp:lowerclose(LCP, Msg),
