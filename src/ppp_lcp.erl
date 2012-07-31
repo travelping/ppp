@@ -11,6 +11,7 @@
 -export([init/2, up/1, down/1, starting/1, finished/1]).
 -export([resetci/1, addci/2, ackci/3, nakci/4, rejci/3, reqci/4]).
 -export([handler_lower_event/3]).
+-export([opened/2]).
 
 -include("ppp_fsm.hrl").
 -include("ppp_lcp.hrl").
@@ -313,6 +314,21 @@ finished(State) ->
     io:format("~p: Finished~n", [?MODULE]),
     %% link_terminated(f->unit);
     {terminated, State}.
+
+%%===================================================================
+%% ppp_fsm state callbacks
+%%===================================================================
+opened({_, 'CP-Echo-Request', Id, Magic}, State = #state{got_opts = GotOpts, his_opts = HisOpts})
+  when Magic =:= HisOpts#lcp_opts.magicnumber ->
+    io:format("MyState: ~p~n", [State]),
+    Reply = {lcp, 'CP-Echo-Reply', Id, GotOpts#lcp_opts.magicnumber},
+    {send_reply, opened, Reply, State};
+opened({_, 'CP-Echo-Request', _Id, Magic}, State = #state{his_opts = HisOpts}) ->
+    io:format("got echo-request with invaid magic, got ~p, expected ~p~n",
+	      [Magic, HisOpts#lcp_opts.magicnumber]),
+    {ignore, opened, State};
+opened(_, State) ->
+    {ignore, opened, State}.
 
 %%===================================================================
 %% Option Generation

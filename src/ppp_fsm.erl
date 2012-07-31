@@ -885,14 +885,9 @@ opened({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, 
 opened({_, 'CP-Discard-Request', _Id}, _From, State) ->
     reply(ok, opened, State);
 
-opened({_, 'CP-Echo-Request', Id, Data}, _From, State) ->
-    NewState = send_echo_reply(Id, Data, State),
-    reply(ok, opened, NewState);
-
 opened(Frame, _From, State)
   when ?IS_PROTOCOL_FRAME(Frame, State) ->
-    ignore_frame_in(opened, Frame),
-    reply(ok, opened, State);
+    cb_unhandled_frame(Frame, opened, State);
 
 opened(Event, _From, State) ->
     invalid_event(opened, Event),
@@ -1000,6 +995,25 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%===================================================================
 %% callbacks
 
+cb_unhandled_frame(Frame, StateName, State = #state{protocol_mod = ProtoMod, protocol_state = ProtoState}) ->
+    try ProtoMod:StateName(Frame, ProtoState) of
+	{send_reply, NewStateName, Reply, NewProtoState} ->
+	    NewState0 = State#state{protocol_state = NewProtoState},
+	    NewState1 = send_packet(Reply, NewState0),
+	    reply(ok, NewStateName, NewState1);
+	{ignore, NewStateName, NewProtoState} ->
+	    ignore_frame_in(StateName, Frame),
+	    NewState = State#state{protocol_state = NewProtoState},
+	    reply(ok, NewStateName, NewState);
+	{Reply, NewStateName, NewProtoState} ->
+	    NewState = State#state{protocol_state = NewProtoState},
+	    reply(Reply, NewStateName, NewState)
+    catch
+	_:_ -> 
+	    ignore_frame_in(StateName, Frame),
+	    reply(ok, StateName, State)
+    end.
+     
 lower_event(Event, From, StateName, State = #state{protocol_mod = ProtoMod, protocol_state = ProtoState}) ->
     ProtoMod:handler_lower_event(Event, {From, StateName, State}, ProtoState).
 
@@ -1262,7 +1276,3 @@ send_terminate_ack(Id, Data, State = #state{protocol = Protocol}) ->
 
 send_code_reject(Request, State = #state{protocol = Protocol}) ->
     send_packet({Protocol, 'CP-Code-Reject', element(3, Request), Request}, State).
-
-send_echo_reply(Id, Data, State = #state{protocol = Protocol}) ->
-    send_packet({Protocol, 'CP-Echo-Reply', Id, Data}, State).
-
