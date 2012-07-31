@@ -189,10 +189,10 @@ encode({lcp, 'CP-Code-Reject', Id, RejectedPacket}) ->
     encode(<<?PPP_LCP:16>>, ?'CP-Code-Reject', Id, BinRejectedPacket);
 encode({lcp, 'CP-Discard-Request', Id}) ->
     encode(<<?PPP_LCP:16>>, ?'CP-Discard-Request', Id, <<>>);
-encode({lcp, 'CP-Echo-Request', Id}) ->
-    encode(<<?PPP_LCP:16>>, ?'CP-Echo-Request', Id, <<>>);
-encode({lcp, 'CP-Echo-Reply', Id}) ->
-    encode(<<?PPP_LCP:16>>, ?'CP-Echo-Reply', Id, <<>>);
+encode({lcp, 'CP-Echo-Request', Id, Magic}) ->
+    encode(<<?PPP_LCP:16>>, ?'CP-Echo-Request', Id, <<Magic:32>>);
+encode({lcp, 'CP-Echo-Reply', Id, Magic}) ->
+    encode(<<?PPP_LCP:16>>, ?'CP-Echo-Reply', Id, <<Magic:32>>);
 encode({lcp, 'CP-Protocol-Reject', Id, RejectedProtocol, RejectedInfo}) ->
     encode(<<?PPP_LCP:16>>, ?'CP-Protocol-Reject', Id, <<RejectedProtocol:16, RejectedInfo/binary>>);
 encode({lcp, 'CP-Identification', Id, Magic, Message}) ->
@@ -256,10 +256,10 @@ decode_lcp(RejectedPacket, Id, ?'CP-Code-Reject') ->
     {lcp, 'CP-Code-Reject', Id, RejectedPacket};
 decode_lcp(_Data, Id, ?'CP-Discard-Request') ->
     {lcp, 'CP-Discard-Request', Id};
-decode_lcp(_Data, Id, ?'CP-Echo-Request') ->
-    {lcp, 'CP-Echo-Request', Id};
-decode_lcp(_Data, Id, ?'CP-Echo-Reply') ->
-    {lcp, 'CP-Echo-Reply', Id};
+decode_lcp(<<Magic:32/integer, _Data/binary>>, Id, ?'CP-Echo-Request') ->
+    {lcp, 'CP-Echo-Request', Id, Magic};
+decode_lcp(<<Magic:32/integer, _Data/binary>>, Id, ?'CP-Echo-Reply') ->
+    {lcp, 'CP-Echo-Reply', Id, Magic};
 decode_lcp(<<RejectedProtocol:16/integer, RejectedInfo/binary>>, Id, ?'CP-Protocol-Reject') ->
     {lcp, 'CP-Protocol-Reject', Id, RejectedProtocol, RejectedInfo};
 decode_lcp(<<Magic:32/integer, Message/binary>>, Id, ?'CP-Identification') ->
