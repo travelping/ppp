@@ -308,10 +308,10 @@ decode_lcp_option(<<ACCM:32/integer>>, ?CI_ASYNCMAP) ->
     {asyncmap, ACCM};
 decode_lcp_option(<<Auth:16/integer>>, ?CI_AUTHTYPE)
   when Auth == ?PPP_EAP; Auth == ?PPP_PAP ->
-    {auth, cp_auth_protocol(Auth), none};
+    {auth, cp_auth_protocol(Auth)};
 decode_lcp_option(<<Auth:16/integer, MDType:8/integer>>, ?CI_AUTHTYPE)
   when Auth == ?PPP_CHAP ->
-    {auth, cp_auth_protocol(Auth), chap_md_type(MDType)};
+    {auth, {cp_auth_protocol(Auth), chap_md_type(MDType)}};
 decode_lcp_option(<<QP:16/integer, Period:32/integer>>, ?CI_QUALITY) ->
     {quality, QP, Period};
 decode_lcp_option(<<Magic:32/integer>>, ?CI_MAGICNUMBER) ->
@@ -399,10 +399,10 @@ encode_lcp_option({mru, MRU}) ->
     encode_lcp_option(?CI_MRU, <<MRU:16/integer>>);
 encode_lcp_option({asyncmap, ACCM}) ->
     encode_lcp_option(?CI_ASYNCMAP, <<ACCM:32/integer>>);
-encode_lcp_option({auth, Auth, _})
+encode_lcp_option({auth, Auth})
 when Auth == eap; Auth == pap ->
     encode_lcp_option(?CI_AUTHTYPE, <<(cp_auth_protocol(Auth)):16/integer>>);
-encode_lcp_option({auth, Auth, MDType})
+encode_lcp_option({auth, {Auth, MDType}})
   when Auth == chap ->
     encode_lcp_option(?CI_AUTHTYPE, <<(cp_auth_protocol(Auth)):16/integer, (chap_md_type(MDType)):8/integer>>);
 encode_lcp_option({quality, QP, Period}) ->

@@ -20,13 +20,14 @@
 -define(DEFMRU, 1500).
 -define(PPP_LQR, 16#c025).
 -define(CBCP_OPT, 6).
--define(CHAP_ALL_AUTH, ['MS-CHAP-v2', 'MS-CHAP', sha1, md5]).
+-define(CHAP_ALL_AUTH, {chap, 'MS-CHAP-v2'}, {chap, 'MS-CHAP'}, {chap, md5}).
+-define(ALL_AUTH, [eap, ?CHAP_ALL_AUTH, pap]).
 
 -record(state, {
 	  config			:: list(),
-	  passive = false		:: boolean(),			%% Don't die if we don't get a response
-	  silent = true			:: boolean(),			%% Wait for the other end to start first
-	  restart = false		:: boolean(),			%% Restart vs. exit after close
+	  %% passive = false		:: boolean(),			%% Don't die if we don't get a response
+	  %% silent = true			:: boolean(),			%% Wait for the other end to start first
+	  %% restart = false		:: boolean(),			%% Restart vs. exit after close
 
 	  link				:: pid(),
 
@@ -68,27 +69,159 @@ handler_lower_event(Event, FSMState, State) ->
     %% do somthing
     ppp_fsm:handler_lower_event(Event, FSMState, State).
 
-%% fsm callback
 
+%% add a term to a List if Config Property is true
+if_set(Property, Config, Term) ->
+    case proplists:get_bool(Property, Config) of
+	true -> Term;
+	_ -> []
+    end.
+
+%% return a term if Config Property is not false
+if_notfalse(Property, Config, Term) ->
+    case proplists:get_value(Property, Config, true) of
+	false -> Term;
+	_ -> []
+    end.
+
+%% return boolean from proplist,
+%% default to Default if not set
+get_bool(Property, Config, Default) ->
+    case proplists:get_value(Property, Config, Default) of
+	true -> true;
+	_    -> false
+    end.
+
+%% return false if a property matches a Value
+false_if_equal(Property, Config, Value) ->
+    case proplists:get_value(Property, Config) of
+	Value -> false;
+	_ ->     true
+    end.
+
+get_mru_bool(Config) ->
+    case proplists:get_value(mru, Config, true) of
+	Value when is_integer(Value) ->
+	    true;
+	true ->
+	    true;
+	_ -> false
+    end.
+
+get_mru_value(Config, Default) ->
+    case proplists:get_value(mru, Config) of
+	Value when is_integer(Value) ->
+	    Value;
+	_ -> Default
+    end.
+
+get_multilink_bool(MultiLink, _Property, _Config)
+  when MultiLink =:= false ->
+    false;
+get_multilink_bool(_MultiLink, Property, Config) ->
+    proplists:get_bool(Property, Config).
+
+get_endpoint_bool(MultiLink, _Config, _Default)
+  when MultiLink =:= false ->
+    false;
+get_endpoint_bool(_MultiLink, Config, Default) ->
+    case proplists:get_value(endpoint, Config, Default) of
+	{Class, Addr} when is_integer(Class), is_binary(Addr) ->
+	    true;
+	true ->
+	    true;
+	_ ->
+	    false
+    end.
+
+get_endpoint_value(MultiLink, _Config)
+  when MultiLink =:= false ->
+    undefined;
+get_endpoint_value(_MultiLink, Config) ->
+    case proplists:get_value(endpoint, Config) of
+	{Class, Addr} when is_integer(Class), is_binary(Addr) ->
+	    #epdisc{class = Class, address = Addr};
+	_ ->
+	    #epdisc{}
+    end.
+
+%% fsm callback
+%%
+%% Options Processing:
+%% (general proplists rules apply)
+%%
+%% Multi-Value Options:
+%%
+%%  Every options can have three possible value:
+%%   true   -> will option try to negotiate
+%%   false  -> will not attempt to negotiate but accept from peer
+%%   reject -> will not attempt to negotiate and reject from peer
+%%
+%%   Options:
+%%     asyncmap
+%%
+%%   Authentication Options:
+%%    eap
+%%    mschap_v2
+%%    mschap
+%%    chap
+%%    pap
+%%
+%%  Special Multi-Value Options
+%%    mru          -> use numeric value for mru instead of true! 
+%%    endpoint     -> {Class, Address} tuple instead of true
+%%
+%% Enable/Disable (true/false) Options:
+%%    pcomp
+%%    accomp
+%%    magic
+%%    multilink    -> disable multilink negotiation
+%%
 init(Link, Config) ->
+    %% Permit all AuthMechs that are not explicitly denied
+    PermitedAuth = lists:flatten([if_notfalse(eap,       Config, eap),
+				  if_notfalse(mschap_v2, Config, {chap, 'MS-CHAP-v2'}),
+				  if_notfalse(mschap,    Config, {chap, 'MS-CHAP'}),
+				  if_notfalse(chap,      Config, {chap, md5}),
+				  if_notfalse(pap,       Config, pap)]),
+
+    %% Want all AuthMechs that are explicitly requested
+    WantAuth = lists:flatten([if_set(eap,       Config, eap),
+			      if_set(mschap_v2, Config, {chap, 'MS-CHAP-v2'}),
+			      if_set(mschap,    Config, {chap, 'MS-CHAP'}),
+			      if_set(chap,      Config, {chap, md5}),
+			      if_set(pap,       Config, pap)]),
+
+    MultiLink = proplists:get_bool(multilink, Config),
+
     WantOpts = #lcp_opts{
-      neg_mru = true,
-      mru = ?DEFMRU,
-      neg_asyncmap = true,
-      neg_magicnumber = true,
-      neg_pcompression = true,
-      neg_accompression = true
+      neg_mru = get_mru_bool(Config),
+      mru = get_mru_value(Config, ?DEFMRU),
+      neg_asyncmap = get_bool(asyncmap, Config, true),
+      neg_auth = WantAuth,
+      neg_magicnumber = get_bool(magic, Config, true),
+      neg_pcompression = get_bool(pcomp, Config, true),
+      neg_accompression = get_bool(accomp, Config, true),
+
+      neg_mrru = get_multilink_bool(MultiLink, mrru, Config),
+      neg_ssnhf = get_multilink_bool(MultiLink, shortseq, Config),
+
+      neg_endpoint = get_endpoint_bool(MultiLink, Config, false),
+      endpoint = get_endpoint_value(MultiLink, Config)
      },
 
     AllowOpts = #lcp_opts{
-      neg_mru = true,
-      mru = ?MAXMRU,
-      neg_asyncmap = true,
-      neg_auth = [eap, {chap, ?CHAP_ALL_AUTH}, pap],
-      neg_magicnumber = true,
-      neg_pcompression = true,
-      neg_accompression = true,
-      neg_endpoint = true
+      neg_mru = get_mru_bool(Config),
+      mru = get_mru_value(Config, ?MAXMRU),
+      neg_asyncmap = false_if_equal(asyncmap, Config, reject),
+      neg_auth = PermitedAuth,
+      neg_magicnumber = get_bool(magic, Config, true),
+      neg_pcompression = false_if_equal(pcomp, Config, reject),
+      neg_accompression = false_if_equal(accomp, Config, reject),
+
+      neg_mrru = get_multilink_bool(MultiLink, mrru, Config),
+      neg_ssnhf = get_multilink_bool(MultiLink, shortseq, Config),
+      neg_endpoint = get_endpoint_bool(MultiLink, Config, true)
      },
 
 %% TODO: apply config to want_opts and allow_opts
@@ -97,6 +230,7 @@ init(Link, Config) ->
       passive = proplists:get_bool(passive, Config),
       silent = proplists:get_bool(silent, Config),
 %%      restart = proplists:get_bool(restart, Config),
+
       term_restart_count = proplists:get_value(lcp_max_terminate, Config, 2),
       conf_restart_count = proplists:get_value(lcp_max_configure, Config, 10),
       failure_count = proplists:get_value(lcp_max_failure, Config, 5),
@@ -114,8 +248,7 @@ auth_reset(State = #state{got_opts = GotOpts}) ->
 %% TODO:
 %%   select auth schemes based on availabe secrets and config
 %%
-    GotOpts1 = GotOpts#lcp_opts{neg_auth = [eap, {chap, ?CHAP_ALL_AUTH}, pap]},
-    State#state{got_opts = GotOpts1}.
+    State#state{got_opts = GotOpts}.
 
 addci(_StateName, State = #state{got_opts = GotOpts}) ->
     Options = lcp_addcis(GotOpts),
@@ -289,10 +422,15 @@ lcp_nakci({asyncmap, _}, #lcp_opts{neg_asyncmap = GotNegACCM, asyncmap = GotACCM
 %% they are proposing a different protocol, or a different
 %% hash algorithm for CHAP.
 %%
-lcp_nakci({auth, NakAuth, _}, #lcp_opts{neg_auth = GotAuth}, _WantOpts, TryOpts, NakOpts)
-  when NakAuth == eap; NakAuth == pap ->
+lcp_nakci({auth, NakAuth}, #lcp_opts{neg_auth = []}, _WantOpts, TryOpts, NakOpts = #lcp_opts{neg_auth = []}) ->
+    N1 = NakOpts#lcp_opts{neg_auth = NakOpts#lcp_opts.neg_auth ++ NakAuth},
+    {TryOpts, N1};
+
+lcp_nakci({auth, NakAuth}, #lcp_opts{neg_auth = GotAuth}, _WantOpts, TryOpts, NakOpts) ->
     case GotAuth of
 	[NakAuth|_] ->
+	    %% Whoops, they Nak'd our algorithm of choice
+	    %% but then suggested it back to us.
 	    false;
 	[LastAuth|TryAuth] ->
 	    T1 = TryOpts#lcp_opts{neg_auth = TryAuth},
@@ -301,31 +439,6 @@ lcp_nakci({auth, NakAuth, _}, #lcp_opts{neg_auth = GotAuth}, _WantOpts, TryOpts,
 	    N1 = NakOpts#lcp_opts{neg_auth = NakOpts#lcp_opts.neg_auth ++ [LastAuth]},
 	    {T1, N1}
     end;
-
-lcp_nakci({auth, NakAuth, NakMDType}, #lcp_opts{neg_auth = GotAuth}, _WantOpts, TryOpts, NakOpts)
-  when NakAuth == chap ->
-    case GotAuth of
-	[{NakAuth, [NakMDType|_]}|_] ->
-	    %% Whoops, they Nak'd our algorithm of choice
-	    %% but then suggested it back to us.
-	    false;
-	[LastAuth|RestAuth] ->
-	    case LastAuth of
-		{chap, _} -> NextAuth = LastAuth;
-		_         -> NextAuth = RestAuth
-		end,
-	    TryMDTypes = suggest_md_type(NakMDType, proplists:get_value(NakAuth, NextAuth)),
-	    TryAuth = lists:keyreplace(NakAuth, 1, NextAuth, {NakAuth, TryMDTypes}),
-	    T1 = TryOpts#lcp_opts{neg_auth = TryAuth},
-
-	    %% FIXME: too simplistic..
-	    N1 = NakOpts#lcp_opts{neg_auth = NakOpts#lcp_opts.neg_auth ++ [NakAuth]},
-	    {T1, N1}
-    end;
-
-lcp_nakci({auth, NakAuth, _}, #lcp_opts{neg_auth = []}, _WantOpts, TryOpts, NakOpts = #lcp_opts{neg_auth = []}) ->
-    N1 = NakOpts#lcp_opts{neg_auth = NakOpts#lcp_opts.neg_auth ++ NakAuth},
-    {TryOpts, N1};
 
 lcp_nakci({quality, NakQR, NakPeriod}, #lcp_opts{neg_lqr = true}, _WantOpts, TryOpts, NakOpts) ->
     if NakQR /= ?PPP_LQR -> 
@@ -409,14 +522,6 @@ lcp_nakci({epdisc, _, _}, #lcp_opts{neg_endpoint = false}, _WantOpts, TryOpts, N
 lcp_nakci(_, _, _, _, _) ->
     false.
 
-%% drop the first (currently prefered) because it has been rejected
-suggest_md_type(Prefered, [_|Available]) ->
-    case proplists:get_bool(Prefered, Available) of
-	true ->
-	    [Prefered|proplists:delete(Prefered, Available)];
-	false -> Available
-    end.
-
 %%TODO: does this really matter?
 %%
 %% RFC1661 says:
@@ -447,27 +552,10 @@ lcp_rejci({mru, MRU}, #lcp_opts{neg_mru = true, mru = MRU}, TryOpts) ->
 lcp_rejci({asyncmap, ACCM}, #lcp_opts{neg_asyncmap = true, asyncmap = ACCM}, TryOpts) ->
     TryOpts#lcp_opts{neg_asyncmap = false};
 
-lcp_rejci({auth, RejAuth, _}, #lcp_opts{neg_auth = GotAuth}, TryOpts = #lcp_opts{neg_auth = TryAuth})
-  when RejAuth == pap; RejAuth == eap ->
-    case proplists:get_bool(RejAuth, GotAuth) of
-	true -> TryOpts#lcp_opts{neg_auth = proplists:delete(RejAuth, TryAuth)};
+lcp_rejci({auth, RejAuth}, #lcp_opts{neg_auth = GotAuth}, TryOpts = #lcp_opts{neg_auth = TryAuth}) ->
+    case lists:member(RejAuth, GotAuth) of
+	true -> TryOpts#lcp_opts{neg_auth = lists:delete(RejAuth, TryAuth)};
 	_    -> false
-    end;
-
-lcp_rejci({auth, RejAuth, RejMDType}, #lcp_opts{neg_auth = GotAuth}, TryOpts = #lcp_opts{neg_auth = TryAuth})
-  when RejAuth == chap ->
-    case proplists:get_value(RejAuth, GotAuth) of
-	[RejMDType] ->
-	    %% last CHAP MD
-	    TryOpts#lcp_opts{neg_auth = proplists:delete(RejAuth, TryAuth)};
-	TryMDType when is_list(TryMDType) ->
-	    case proplists:get_bool(RejMDType, TryMDType) of
-		true ->
-		    NewTryMDType = proplists:delete(RejMDType, TryMDType),
-		    TryOpts#lcp_opts{neg_auth = lists:keyreplace(RejAuth, 1, TryAuth, NewTryMDType)};
-		_ ->
-		    false
-	    end
     end;
 
 lcp_rejci({quality, ?PPP_LQR, Period}, #lcp_opts{neg_lqr = true, lqr_period = Period}, TryOpts) ->
@@ -530,19 +618,10 @@ lcp_ackci({asyncmap, AckACCM}, #lcp_opts{neg_asyncmap = GotIt, asyncmap = GotACC
   when GotACCM /= 16#ffffffff ->
     GotIt and (AckACCM == GotACCM);
     
-lcp_ackci({auth, AckAuth, _}, #lcp_opts{neg_auth = GotAuth})
-  when AckAuth == pap; AckAuth == eap ->
+lcp_ackci({auth, AckAuth}, #lcp_opts{neg_auth = GotAuth}) ->
     io:format("AckAuth: ~p~n", [AckAuth]),
     io:format("GotAuth: ~p~n", [GotAuth]),
-    proplists:get_bool(AckAuth, GotAuth);
-lcp_ackci({auth, AckAuth, AckMDType}, #lcp_opts{neg_auth = GotAuth})
-  when AckAuth == chap ->
-    case GotAuth of
-	[{AckAuth, [AckMDType|_]}|_] ->
-	    true;
-	_ ->
-	    false
-    end;
+    lists:member(AckAuth, GotAuth);
 
 lcp_ackci({quality, AckQP, AckPeriod}, #lcp_opts{neg_lqr = GotIt, lqr_period = GotPeriod}) ->
     GotIt and (AckQP == ?PPP_LQR) and (AckPeriod == GotPeriod);
@@ -623,7 +702,7 @@ lcp_reqci({asyncmap, ReqACCM}, #lcp_opts{neg_asyncmap = true, asyncmap = Allowed
     end,
     {Verdict, HisOptsNew};
 
-lcp_reqci({auth, _, _}, #lcp_opts{neg_auth = PermitedAuth}, _, HisOpts)
+lcp_reqci({auth, _}, #lcp_opts{neg_auth = PermitedAuth}, _, HisOpts)
   when not is_list(PermitedAuth) orelse PermitedAuth == [] ->
     io:format("No auth is possible~n"),
     {rej, HisOpts};
@@ -637,36 +716,17 @@ lcp_reqci({auth, _, _}, #lcp_opts{neg_auth = PermitedAuth}, _, HisOpts)
 %% Whether we end up doing CHAP, UPAP, or EAP depends then on
 %% the ordering of the CIs in the peer's Configure-Request.
 
-lcp_reqci({auth, ReqAuth, _}, _, _, HisOpts = #lcp_opts{neg_auth = HisAuth})
+lcp_reqci({auth, ReqAuth}, _, _, HisOpts = #lcp_opts{neg_auth = HisAuth})
   when HisAuth /= none ->
     io:format("lcp_reqci: rcvd AUTHTYPE ~p, rejecting...~n", [ReqAuth]),
     {rej, HisOpts};
-lcp_reqci({auth, ReqAuth, _}, #lcp_opts{neg_auth = PermitedAuth}, _, HisOpts)
-  when ReqAuth == pap; ReqAuth == eap ->
-    case proplists:get_bool(ReqAuth, PermitedAuth) of
+lcp_reqci({auth, ReqAuth}, #lcp_opts{neg_auth = PermitedAuth}, _, HisOpts) ->
+    case lists:member(ReqAuth, PermitedAuth) of
 	true ->
 	    Verdict = ack,
 	    HisOptsNew = HisOpts#lcp_opts{neg_auth = ReqAuth};
 	_ ->
 	    Verdict = {nack, suggest_auth(PermitedAuth)},
-	    HisOptsNew = HisOpts
-    end,
-    {Verdict, HisOptsNew};
-
-lcp_reqci({auth, ReqAuth, ReqMDType}, #lcp_opts{neg_auth = PermitedAuth}, _, HisOpts)
-  when ReqAuth == chap ->
-    case proplists:get_value(ReqAuth, PermitedAuth) of
-	 PermiteMDTypes when is_list(PermiteMDTypes) andalso PermiteMDTypes /= [] ->
-	    case proplists:get_bool(ReqMDType, PermiteMDTypes) of
-		true ->
-		    Verdict = ack,
-		    HisOptsNew = HisOpts#lcp_opts{neg_auth = {ReqAuth, ReqMDType}};
-		_ ->
-		    Verdict = {nack, suggest_auth(proplists:delete(chap, PermitedAuth))},
-		    HisOptsNew = HisOpts
-		end;
-	_ ->
-	    Verdict = {nack, suggest_auth(proplists:delete(chap, PermitedAuth))},
 	    HisOptsNew = HisOpts
     end,
     {Verdict, HisOptsNew};
@@ -728,24 +788,18 @@ lcp_reqci(Req, _, _, HisOpts) ->
     io:format("His: ~p~n", [HisOpts]),
     {rej, HisOpts}.
 
+%% take the first element that is present in both lists
 suggest_auth(PermitedAuths) ->
-    suggest_auth(PermitedAuths, [eap, chap, pap]).
+    suggest_auth(PermitedAuths, ?ALL_AUTH).
 suggest_auth(_, []) ->
     [];
 suggest_auth(PermitedAuths, [Auth|Rest]) ->
-    case proplists:get_value(Auth, PermitedAuths, false) of
+    case lists:member(Auth, PermitedAuths) of
 	false ->
 	    suggest_auth(PermitedAuths, Rest);
 	true ->
-	    {auth, Auth, none};
-	PermiteMDTypes when is_list(PermiteMDTypes) ->
-	    suggest_chap(PermiteMDTypes)
+	    {auth, Auth}
     end.
-
-suggest_chap([]) ->
-    [];
-suggest_chap([MDType|_]) ->
-    {auth, chap, MDType}.
 
 process_reqcis(Options, RejectIfDisagree, AllowedOpts, GotOpts) ->
     process_reqcis(Options, RejectIfDisagree, AllowedOpts, GotOpts, #lcp_opts{}, [], [], []).

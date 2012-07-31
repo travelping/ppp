@@ -1094,14 +1094,26 @@ state_transitions(_NewStateName, State) ->
     State.
 
 reply(Reply, NextStateName, State) ->
-    NewState = state_transitions(NextStateName, State),
     io:format("FSM: going to: ~p~n", [NextStateName]),
-    {reply, Reply, NextStateName, NewState}.
+    NewState = state_transitions(NextStateName, State),
+    case NextStateName of
+	opened ->
+	    %% special case, we do not expect any further work soon
+	    {reply, Reply, NextStateName, NewState, hibernate};
+	_ ->
+	    {reply, Reply, NextStateName, NewState}
+    end.
 
 next_state(NextStateName, State) ->
     io:format("FSM: going to: ~p~n", [NextStateName]),
     NewState = state_transitions(NextStateName, State),
-    {next_state, NextStateName, NewState}.
+    case NextStateName of
+	opened ->
+	    %% special case, we do not expect any further work soon
+	    {next_state, NextStateName, NewState, hibernate};
+	_ ->
+	    {next_state, NextStateName, NewState}
+    end.
 
 %%===================================================================
 
