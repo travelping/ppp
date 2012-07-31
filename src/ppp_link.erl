@@ -3,7 +3,7 @@
 -behaviour(gen_fsm).
 
 %% API
--export([start_link/2]).
+-export([start_link/3]).
 -export([packet_in/2, send/2]).
 -export([layer_up/3, layer_down/3, layer_started/3, layer_finished/3]).
 -export([auth_withpeer/3, auth_peer/3]).
@@ -60,21 +60,15 @@ auth_withpeer(Link, Layer, Info) ->
 auth_peer(Link, Layer, Info) ->
     gen_fsm:send_event(Link, {auth_peer, Layer, Info}).
 
-start_link(TransportModule, TransportRef) ->
-    gen_fsm:start_link(?MODULE, [{TransportModule, TransportRef}], []).
+start_link(TransportModule, TransportRef, Config) ->
+    gen_fsm:start_link(?MODULE, [{TransportModule, TransportRef}, Config], []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
 %%%===================================================================
 
-init([Transport]) ->
+init([Transport, Config]) ->
     process_flag(trap_exit, true),
-    Config = [
-	      silent,
-	      {ipcp_hisaddr, <<10,0,0,2>>},
-	      {ipcp_ouraddr, <<10,0,0,1>>},
-	      {ms_dns, <<10,0,0,1>>}
-	     ],
 
     {ok, LCP} = ppp_lcp:start_link(self(), Config),
     {ok, PAP} = ppp_pap:start_link(self(), Config),
