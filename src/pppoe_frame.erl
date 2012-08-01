@@ -15,6 +15,41 @@
 -define(PPPOE_PADS, 16#65).
 -define(PPPOE_PADT, 16#a7).
 
+-define(END_OF_LIST,		16#0000).
+-define(SERVICE_NAME,		16#0101).
+-define(AC_NAME,		16#0102).
+-define(HOST_UNIQ,		16#0103).
+-define(AC_COOKIE,		16#0104).
+-define(VENDOR_SPECIFIC,	16#0105).
+-define(RELAY_SESSION_ID,	16#0110).
+-define(SERVICE_NAME_ERROR,	16#0201).
+-define(AC_SYSTEM_ERROR,	16#0202).
+-define(GENERIC_ERROR,		16#0203).
+
+tag(?END_OF_LIST)		-> 'End-Of-List';
+tag(?SERVICE_NAME)		-> 'Service-Name';
+tag(?AC_NAME)			-> 'AC-Name';
+tag(?HOST_UNIQ)			-> 'Host-Uniq';
+tag(?AC_COOKIE)			-> 'AC-Cookie';
+tag(?VENDOR_SPECIFIC)		-> 'Vendor-Specific';
+tag(?RELAY_SESSION_ID)		-> 'Relay-Session-Id';
+tag(?SERVICE_NAME_ERROR)	-> 'Service-Name-Error';
+tag(?AC_SYSTEM_ERROR)		-> 'AC-System-Error';
+tag(?GENERIC_ERROR)		-> 'Generic-Error';
+
+tag('End-Of-List')		-> '?END_OF_LIST';
+tag('Service-Name')		-> '?SERVICE_NAME';
+tag('AC-Name')			-> '?AC_NAME';
+tag('Host-Uniq')		-> '?HOST_UNIQ';
+tag('AC-Cookie')		-> '?AC_COOKIE';
+tag('Vendor-Specific')		-> '?VENDOR_SPECIFIC';
+tag('Relay-Session-Id')		-> '?RELAY_SESSION_ID';
+tag('Service-Name-Error')	-> '?SERVICE_NAME_ERROR';
+tag('AC-System-Error')		-> '?AC_SYSTEM_ERROR';
+tag('Generic-Error')		-> '?GENERIC_ERROR';
+
+tag(X)				-> X.
+
 pppoe_code(?PPPOE_PPP) -> ppp;
 pppoe_code(?PPPOE_PADO) -> pado;
 pppoe_code(?PPPOE_PADI) -> padi;
@@ -42,11 +77,18 @@ decode(ppp, SessionId, PayLoad) ->
 decode(Code, SessionId, PayLoad) ->
     {Code, SessionId, decode_tlv(PayLoad)}.
 
+decode_tag(<<Vendor:32/integer, Value/binary>>, Tag = 'Vendor-Specific') ->
+    {Tag, Vendor, Value};
+decode_tag(Value, Tag) ->
+    {Tag, Value}.
 
 decode_tlv(<<>>, Acc) ->
     lists:reverse(Acc);
+decode_tlv(<<0:16/integer, 0:16/integer>>, Acc) ->
+    %% End-Of-List
+    lists:reverse(Acc);
 decode_tlv(<<Tag:16/integer, Length:16/integer, Value:Length/binary, Rest/binary>>, Acc) ->
-    decode_tlv(Rest, [{Tag, Value}|Acc]).
+    decode_tlv(Rest, [decode_tag(Value, tag(Tag))|Acc]).
 
 decode_tlv(Bin) ->
     decode_tlv(Bin, []).
@@ -62,7 +104,7 @@ encode({Code, SessionId, TLV})
       SessionId:16, (size(PayLoad)):16, PayLoad/binary>>.
 
 encode_tlv(Tag, Value) ->
-    <<Tag:16, (size(Value)):16/integer, Value/binary>>.
+    <<(tag(Tag)):16, (size(Value)):16/integer, Value/binary>>.
 
 encode_tlv(TLV) ->
     << << (encode_tlv(Tag, Value))/binary >> || {Tag, Value} <- TLV>>.
