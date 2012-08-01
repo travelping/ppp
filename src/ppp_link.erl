@@ -180,7 +180,12 @@ terminating({packet_in, Frame}, State = #state{lcp = LCP})
 	Reply ->
 	    io:format("LCP in phase terminating got: ~p~n", [Reply]),
 	    {next_state, terminating, State}
-    end.
+    end;
+
+terminating({layer_finished, lcp, terminated}, State) ->
+    io:format("LCP in phase terminating got: terminated~n"),
+    %% TODO: might want to restart LCP.....
+    {stop, normal, State}.
 
 handle_event({packet_out, Frame}, StateName, State = #state{transport = Transport}) ->
     transport_send(Transport, Frame),
