@@ -49,7 +49,7 @@ start_link(Role) ->
 init([Role]) ->
     Args = gen_opts() ++ role_opts(Role),
     Port = open_port({spawn_executable, "/usr/sbin/pppd"}, [exit_status, binary, {args, Args}]),
-    {ok, Connection} = ppp_link:start_link(?MODULE, self()),
+    {ok, Connection} = ppp_link:start_link(?MODULE, self(), []),
     {ok, #state{port = Port, connection = Connection}}.
 
 %%--------------------------------------------------------------------
