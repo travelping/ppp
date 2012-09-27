@@ -8,8 +8,11 @@
                   stdlib,
                   sasl,
 		  regine,
-		  flower
+		  flower,
+		  eradius
                  ]},
   {mod, { ppp_app, []}},
-  {env, []}
+  {env, [
+	 {radius_server, {{127,0,0,1}, 1812, <<"secret">>}}
+	 ]}
  ]}.

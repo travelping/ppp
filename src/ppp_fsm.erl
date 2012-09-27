@@ -126,9 +126,13 @@
 %%% API
 %%%===================================================================
 
+fsm_lowerup(undefined) ->
+    ok;
 fsm_lowerup(FSM) ->
     gen_fsm:sync_send_all_state_event(FSM, {lower, up}).
 
+fsm_lowerdown(undefined) ->
+    ok;
 fsm_lowerdown(FSM) ->
     gen_fsm:sync_send_all_state_event(FSM, {lower, down}).
 

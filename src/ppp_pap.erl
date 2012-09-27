@@ -18,6 +18,10 @@
 
 -define(SERVER, ?MODULE). 
 
+-include_lib("eradius/include/eradius_lib.hrl").
+-include_lib("eradius/include/eradius_dict.hrl").
+-include_lib("eradius/include/dictionary.hrl").
+
 %% Client states.
 -type client_state() ::
 	c_initial			%% Connection down
@@ -309,10 +313,10 @@ s_listen(timeout, State = #state{link = Link}) ->
 s_listen({pap, 'PAP-Authentication-Request', Id, PeerId, Passwd}, State) ->
     NewState0 = stop_s_timer(State),
     case check_passwd(PeerId, Passwd) of
-	success ->
+	{success, Opts} ->
 	    %% notice("PAP peer authentication succeeded for %q", rhostname);
 	    NewState1 = send_authentication_ack(Id, <<"">>, NewState0),
-	    {reply, {auth_peer, success, PeerId}, s_open, NewState1};
+	    {reply, {auth_peer, success, PeerId, Opts}, s_open, NewState1};
 	_ ->
 	    %% warn("PAP peer authentication failed for %q", rhostname);
 	    NewState1 = send_authentication_nak(Id, <<"">>, NewState0),
@@ -430,9 +434,79 @@ send_authentication_nak(Id, Msg, State) ->
 %%===================================================================
 %% Password Logic
 %%
-check_passwd(<<"test">>, <<"secret">>) ->
-    success;
-check_passwd(PeerId, PeerId) ->
-    success;
-check_passwd(_PeerId, _Passwd) ->
+%% check_passwd(<<"test">>, <<"secret">>) ->
+%%     success;
+%% check_passwd(PeerId, PeerId) ->
+%%     success;
+%% check_passwd(_PeerId, _Passwd) ->
+%%     fail.
+
+check_passwd(PeerId, Passwd) ->
+    Attrs = [
+	     {?User_Name, PeerId},
+	     {?User_Password , Passwd}
+	    ],
+    Req = #radius_request{
+	     cmd = request,
+	     attrs = Attrs,
+	     msg_hmac = true},
+    {ok, NAS} = application:get_env(radius_server),
+    radius_response(eradius_client:send_request(NAS, Req), NAS).
+
+radius_response({ok, Response}, {_, _, Secret}) ->
+    radius_reply(eradius_lib:decode_request(Response, Secret));
+radius_response(Response, _) ->
+    io:format("RADIUS failed with ~p~n", [Response]),
     fail.
+
+radius_reply(#radius_request{cmd = accept} = Reply) ->
+    io:format("RADIUS Reply: ~p~n", [Reply]),
+    case process_radius_attrs(fun process_pap_attrs/2, success, Reply) of
+	{success, _} = Result ->
+	    Result;
+	_ ->
+	    fail
+    end;
+radius_reply(#radius_request{cmd = reject} = Reply) ->
+    io:format("RADIUS failed with ~p~n", [Reply]),
+    fail;
+radius_reply(Reply) ->
+    io:format("RADIUS failed with ~p~n", [Reply]),
+    fail.
+
+%% iterate over the RADIUS attributes
+process_radius_attrs(Fun, Verdict, #radius_request{attrs = Attrs}) ->
+    lists:foldr(Fun, {Verdict, []}, Attrs).
+
+process_pap_attrs(AVP, {_Verdict, _Opts} = Acc0) ->
+    process_gen_attrs(AVP, Acc0).
+
+%% Service-Type = Framed-User
+process_gen_attrs({#attribute{id = ?Service_Type}, 2}, {_Verdict, _Opts} = Acc0) ->
+    Acc0;
+process_gen_attrs(AVP = {#attribute{id = ?Service_Type}, _}, Acc0) ->
+    process_unexpected_value(AVP, Acc0);
+
+%% Framed-Protocol = PPP
+process_gen_attrs({#attribute{id = ?Framed_Protocol}, 1}, {_Verdict, _Opts} = Acc0) ->
+    Acc0;
+process_gen_attrs(AVP = {#attribute{id = ?Framed_Protocol}, _}, Acc0) ->
+    process_unexpected_value(AVP, Acc0);
+
+%% Framed-IP-Address = xx.xx.xx.xx
+process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {255,255,255,255}}, {Verdict, Opts} = _Acc0) ->
+    %% user should be allowed to select one
+    {Verdict, [{ipcp_hisaddr, <<0,0,0,0>>}, {accept_remote, true}|Opts]};
+process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {255,255,255,254}}, {Verdict, Opts} = _Acc0) ->
+    %% NAS should select an ip address
+    {Verdict, [{choose_ip, true}, {accept_remote, false}|Opts]};
+process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {A, B, C, D}}, {Verdict, Opts} = _Acc0) ->
+    {Verdict, [{ipcp_hisaddr, <<A, B, C, D>>}, {accept_remote, false}|Opts]};
+
+process_gen_attrs({#attribute{name = Name}, Value} , {_Verdict, _Opts} = Acc0) ->
+    io:format("unhandled reply AVP: ~s: ~p~n", [Name, Value]),
+    Acc0.
+
+process_unexpected_value({#attribute{name = Name}, Value} , {_Verdict, Opts} = _Acc0) ->
+    io:format("unexpected Value in AVP: ~s: ~p~n", [Name, Value]),
+    {fail, Opts}.

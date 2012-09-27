@@ -18,6 +18,7 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {
+	  config		:: list(),         		%% config options proplist
 	  transport		:: pid(), 			%% Transport Layer
 	  lcp			:: pid(), 			%% LCP protocol driver
 	  pap			:: pid(), 			%% PAP protocol driver
@@ -72,10 +73,9 @@ init([Transport, Config]) ->
 
     {ok, LCP} = ppp_lcp:start_link(self(), Config),
     {ok, PAP} = ppp_pap:start_link(self(), Config),
-    {ok, IPCP} = ppp_ipcp:start_link(self(), Config),
     ppp_lcp:loweropen(LCP),
     ppp_lcp:lowerup(LCP),
-    {ok, establish, #state{transport = Transport, lcp = LCP, pap = PAP, ipcp = IPCP}}.
+    {ok, establish, #state{config = Config, transport = Transport, lcp = LCP, pap = PAP}}.
 
 establish({packet_in, Frame}, State = #state{lcp = LCP})
   when element(1, Frame) == lcp ->
@@ -247,8 +247,15 @@ auth_success(Direction, State = #state{auth_pending = Pending}) ->
 	    {next_state, auth, NewState}
     end.
 
-auth_reply({auth_peer, success, PeerId}, State) ->
-    NewState = State#state{peerid = PeerId},
+auth_reply({auth_peer, success, PeerId, Opts}, State = #state{config = Config}) ->
+
+    Config0 = lists:foldl(fun(Opt, Acc) ->
+				  lists:keystore(element(1, Opt), 1, Acc, Opt)
+			  end,
+			  proplists:unfold(Config),
+			  proplists:unfold(Opts)),
+    Config1 = proplists:compact(Config0),
+    NewState = State#state{config = Config1, peerid = PeerId},
     auth_success(auth_peer, NewState);
 
 auth_reply({auth_peer, fail}, State) ->
@@ -272,7 +279,9 @@ lcp_close(Msg, State = #state{lcp = LCP}) ->
 np_finished(State) ->
     lcp_close(<<"No network protocols running">>, State).
 
-np_open(State = #state{ipcp = IPCP}) ->
+np_open(State = #state{config = Config}) ->
+    {ok, IPCP} = ppp_ipcp:start_link(self(), Config),
+    ppp_ipcp:lowerup(IPCP),
     ppp_ipcp:loweropen(IPCP),
-    {next_state, network, State}.
+    {next_state, network, State#state{ipcp = IPCP}}.
 

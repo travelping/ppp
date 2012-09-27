@@ -72,6 +72,9 @@ lowerclose(FSM, Reason) ->
 frame_in(FSM, Frame) ->
     ppp_fsm:fsm_frame_in(FSM, Frame).
 
+update_opts(FMS, Opts) ->
+    ppp_fsm:fsm_update_opts(FMS, Opts).
+
 %%===================================================================
 %% ppp_fsm callbacks
 %%===================================================================
@@ -82,7 +85,6 @@ handler_lower_event(Event, FSMState, State) ->
     %% do somthing
     ppp_fsm:handler_lower_event(Event, FSMState, State).
 
-%% fsm callback
 opt_get_bool(Key, List, Default) ->
     case proplists:get_value(Key, List) of
 	undefined -> Default;
@@ -112,6 +114,22 @@ opt_addr(Key, Config) ->
     end.
 
 init(Link, Config) ->
+    State0 = #state{link = Link, config = Config},
+    State1 = init_opts(State0),
+
+    FsmConfig = #fsm_config{
+      passive = proplists:get_bool(passive, Config),
+      silent = proplists:get_bool(silent, Config),
+%%      restart = proplists:get_bool(restart, Config),
+      term_restart_count = proplists:get_value(ipcp_max_terminate, Config, 2),
+      conf_restart_count = proplists:get_value(ipcp_max_configure, Config, 10),
+      failure_count = proplists:get_value(ipcp_max_failure, Config, 5),
+      restart_timeout = proplists:get_value(ipcp_restart, Config, 3000)
+     },
+
+    {ok, ipcp, FsmConfig, State1}.
+
+init_opts(State = #state{config = Config}) ->
     WantOpts = #ipcp_opts{
       neg_addr = not proplists:get_bool(ipcp_no_address, Config),
       accept_local = proplists:get_bool(accept_local, Config),
@@ -139,23 +157,10 @@ init(Link, Config) ->
       winsaddr2 = Wins2
      },
 
-    State0 = #state{link = Link, config = Config, want_opts = WantOpts, allow_opts = AllowOpts},
-    State1 = opt_vjslots(Config, State0),
+    State0 = State#state{want_opts = WantOpts, allow_opts = AllowOpts},
+    opt_vjslots(Config, State0).
 
-%% TODO: apply config to want_opts and allow_opts
-
-    FsmConfig = #fsm_config{
-      passive = proplists:get_bool(passive, Config),
-      silent = proplists:get_bool(silent, Config),
-%%      restart = proplists:get_bool(restart, Config),
-      term_restart_count = proplists:get_value(ipcp_max_terminate, Config, 2),
-      conf_restart_count = proplists:get_value(ipcp_max_configure, Config, 10),
-      failure_count = proplists:get_value(ipcp_max_failure, Config, 5),
-      restart_timeout = proplists:get_value(ipcp_restart, Config, 3000)
-     },
-
-    {ok, ipcp, FsmConfig, State1}.
-
+%% fsm callback
 resetci(State = #state{want_opts = WantOpts, allow_opts = AllowOpts}) ->
     WantOpts1 = WantOpts#ipcp_opts{
 		  req_addr = (WantOpts#ipcp_opts.neg_addr and AllowOpts#ipcp_opts.neg_addr),
