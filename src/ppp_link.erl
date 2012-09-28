@@ -14,6 +14,9 @@
 	 handle_event/3, handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 
 -include("ppp_lcp.hrl").
+-include("ppp_ipcp.hrl").
+-include_lib("eradius/include/eradius_lib.hrl").
+-include_lib("eradius/include/dictionary.hrl").
 
 -define(SERVER, ?MODULE).
 
@@ -146,7 +149,8 @@ network({packet_in, Frame}, State = #state{lcp = LCP})
     io:format("LCP Frame in phase network: ~p~n", [Frame]),
     case ppp_lcp:frame_in(LCP, Frame) of
  	down ->
-	    lcp_down(State);
+	    State1 = accounting_stop(down, State),
+	    lcp_down(State1);
 	Reply ->
 	    io:format("LCP got: ~p~n", [Reply]),
 	    {next_state, network, State}
@@ -158,12 +162,15 @@ network({packet_in, Frame}, State = #state{ipcp = IPCP})
     io:format("IPCP Frame in phase network: ~p~n", [Frame]),
     case ppp_ipcp:frame_in(IPCP, Frame) of
 	down ->
-	    np_finished(State);
+	    State1 = accounting_stop(down, State),
+	    np_finished(State1);
 	ok ->
 	    {next_state, network, State};
- 	{up, _OurOpts, _HisOpts} ->
+ 	{up, OurOpts, HisOpts} ->
 	    %% IP is open
-	    {next_state, network, State};
+	    io:format("--------------------------~nIPCP is UP~n--------------------------~n"),
+	    State1 = accounting_start(ipcp_up, OurOpts, HisOpts, State),
+	    {next_state, network, State1};
 	Reply when is_tuple(Reply) ->
 	    io:format("IPCP in phase network got: ~p~n", [Reply]),
 	    {next_state, network, State}
@@ -279,9 +286,51 @@ lcp_close(Msg, State = #state{lcp = LCP}) ->
 np_finished(State) ->
     lcp_close(<<"No network protocols running">>, State).
 
-np_open(State = #state{config = Config}) ->
+np_open(State0 = #state{config = Config}) ->
+    State1 = accounting_start(init, State0),
     {ok, IPCP} = ppp_ipcp:start_link(self(), Config),
     ppp_ipcp:lowerup(IPCP),
     ppp_ipcp:loweropen(IPCP),
-    {next_state, network, State#state{ipcp = IPCP}}.
+    {next_state, network, State1#state{ipcp = IPCP}}.
 
+accounting_start(init, State) ->
+    State.
+
+accounting_start(ipcp_up, OurOpts, HisOpts, State) ->
+    io:format("--------------------------~nAccounting: OPEN~n--------------------------~n"),
+    spawn(fun() -> do_accounting_start(OurOpts, HisOpts, State) end),
+    State.
+
+accounting_stop(Reason, State) ->
+    spawn(fun() -> do_accounting_stop(State) end),
+    State.
+
+do_accounting_start(OurOpts, HisOpts,
+		    #state{peerid = PeerId}) ->
+    Attrs = [
+	     {?RStatus_Type, ?RStatus_Type_Start},
+	     {?User_Name, PeerId},
+	     {?Service_Type, 2},
+	     {?Framed_Protocol, 1},
+	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr}
+	    ],
+    Req = #radius_request{
+	     cmd = accreq,
+	     attrs = Attrs,
+	     msg_hmac = true},
+    {ok, NAS} = application:get_env(radius_acct_server),
+    eradius_client:send_request(NAS, Req).
+
+do_accounting_stop(#state{peerid = PeerId}) ->
+    Attrs = [
+	     {?RStatus_Type, ?RStatus_Type_Stop},
+	     {?User_Name, PeerId},
+	     {?Service_Type, 2},
+	     {?Framed_Protocol, 1}
+	    ],
+    Req = #radius_request{
+	     cmd = accreq,
+	     attrs = Attrs,
+	     msg_hmac = true},
+    {ok, NAS} = application:get_env(radius_acct_server),
+    eradius_client:send_request(NAS, Req).

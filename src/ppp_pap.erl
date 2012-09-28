@@ -444,13 +444,15 @@ send_authentication_nak(Id, Msg, State) ->
 check_passwd(PeerId, Passwd) ->
     Attrs = [
 	     {?User_Name, PeerId},
-	     {?User_Password , Passwd}
+	     {?User_Password , Passwd},
+	     {?Service_Type, 2},
+	     {?Framed_Protocol, 1}
 	    ],
     Req = #radius_request{
 	     cmd = request,
 	     attrs = Attrs,
 	     msg_hmac = true},
-    {ok, NAS} = application:get_env(radius_server),
+    {ok, NAS} = application:get_env(radius_auth_server),
     radius_response(eradius_client:send_request(NAS, Req), NAS).
 
 radius_response({ok, Response}, {_, _, Secret}) ->
