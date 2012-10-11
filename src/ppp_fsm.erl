@@ -540,6 +540,9 @@ stopping(Event, _From, State) ->
     reply({error, invalid}, stopping, State).
 
 %% -- req_sent ---------------------------------------
+req_sent({close, Reason}, State) ->
+    NewState = start_terminate_link(Reason, State),
+    next_state(closing, NewState);
 req_sent({timeout, _Ref, ?TIMEOUT_MSG},
 	 State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
     case get_counter(LastRequest, State) of
@@ -630,6 +633,9 @@ req_sent(Event, _From, State) ->
     reply({error, invalid}, req_sent, State).
 
 %% -- ack_rcvd ---------------------------------------
+ack_rcvd({close, Reason}, State) ->
+    NewState = start_terminate_link(Reason, State),
+    next_state(closing, NewState);
 ack_rcvd({timeout, _Ref, ?TIMEOUT_MSG},
 	 State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
     case get_counter(LastRequest, State) of
@@ -718,6 +724,9 @@ ack_rcvd(Event, _From, State) ->
     reply({error, invalid}, ack_rcvd, State).
 
 %% -- ack_sent ---------------------------------------
+ack_sent({close, Reason}, State) ->
+    NewState = start_terminate_link(Reason, State),
+    next_state(closing, NewState);
 ack_sent({timeout, _Ref, ?TIMEOUT_MSG},
 	 State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
     case get_counter(LastRequest, State) of
@@ -810,6 +819,9 @@ ack_sent(Event, _From, State) ->
     reply({error, invalid}, ack_sent, State).
 
 %% -- opened -----------------------------------------
+opened({close, Reason}, State) ->
+    NewState = start_terminate_link(Reason, State),
+    next_state(closing, NewState);
 opened({timeout, _Ref, ?TIMEOUT_MSG}, State) ->
     %% drain spurious timeout
     next_state(opened, State).
