@@ -104,6 +104,7 @@
 
 
 -define(SERVER, ?MODULE).
+-define(TIMEOUT_MSG, ?MODULE).
 
 -record(state, {
 	  config			:: #fsm_config{},
@@ -201,7 +202,7 @@ init([Link, Config, ProtoMod]) ->
 -define(IS_PROTOCOL_FRAME(Frame, State), (element(1, Frame) == State#state.protocol)).
 
 %% -- initial ----------------------------------------
-initial({timeout, _Ref, _Msg}, State) ->
+initial({timeout, _Ref, ?TIMEOUT_MSG}, State) ->
     %% drain spurious timeout
     next_state(initial, State).
 
@@ -223,7 +224,7 @@ initial(Event, _From, State) ->
     reply({error, invalid}, initial, State).
 
 %% -- starting ---------------------------------------
-starting({timeout, _Ref, _Msg}, State) ->
+starting({timeout, _Ref, ?TIMEOUT_MSG}, State) ->
     %% drain spurious timeout
     next_state(starting, State).
 
@@ -250,7 +251,7 @@ starting(Event, _From, State) ->
     reply({error, invalid}, starting, State).
 
 %% -- closed -----------------------------------------
-closed({timeout, _Ref, _Msg}, State) ->
+closed({timeout, _Ref, ?TIMEOUT_MSG}, State) ->
     %% drain spurious timeout
     next_state(closed, State).
 
@@ -317,7 +318,7 @@ closed(Event, _From, State) ->
     reply({error, invalid}, closed, State).
 
 %% -- stopped ----------------------------------------
-stopped({timeout, _Ref, _Msg}, State) ->
+stopped({timeout, _Ref, ?TIMEOUT_MSG}, State) ->
     %% drain spurious timeout
     next_state(stopped, State).
 
@@ -397,7 +398,8 @@ stopped(Event, _From, State) ->
     reply({error, invalid}, stopped, State).
 
 %% -- closing ----------------------------------------
-closing({timeout, _Ref, _Msg}, State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
+closing({timeout, _Ref, ?TIMEOUT_MSG},
+	State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
     case get_counter(LastRequest, State) of
         Cnt when Cnt > 0 ->
 	    NewState = send_terminate_request(State),
@@ -467,7 +469,8 @@ closing(Event, _From, State) ->
     reply({error, invalid}, closing, State).
 
 %% -- stopping ---------------------------------------
-stopping({timeout, _Ref, _Msg}, State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
+stopping({timeout, _Ref, ?TIMEOUT_MSG},
+	 State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
     case get_counter(LastRequest, State) of
         Cnt when Cnt > 0 ->
 	    NewState = send_terminate_request(State),
@@ -537,7 +540,8 @@ stopping(Event, _From, State) ->
     reply({error, invalid}, stopping, State).
 
 %% -- req_sent ---------------------------------------
-req_sent({timeout, _Ref, _Msg}, State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
+req_sent({timeout, _Ref, ?TIMEOUT_MSG},
+	 State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
     case get_counter(LastRequest, State) of
         Cnt when Cnt > 0 ->
 	    NewState = send_configure_request(req_sent, true, State),
@@ -626,7 +630,8 @@ req_sent(Event, _From, State) ->
     reply({error, invalid}, req_sent, State).
 
 %% -- ack_rcvd ---------------------------------------
-ack_rcvd({timeout, _Ref, _Msg}, State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
+ack_rcvd({timeout, _Ref, ?TIMEOUT_MSG},
+	 State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
     case get_counter(LastRequest, State) of
         Cnt when Cnt > 0 ->
 	    NewState = send_configure_request(ack_rcvd, true, State),
@@ -713,7 +718,8 @@ ack_rcvd(Event, _From, State) ->
     reply({error, invalid}, ack_rcvd, State).
 
 %% -- ack_sent ---------------------------------------
-ack_sent({timeout, _Ref, _Msg}, State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
+ack_sent({timeout, _Ref, ?TIMEOUT_MSG},
+	 State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
     case get_counter(LastRequest, State) of
         Cnt when Cnt > 0 ->
 	    NewState = send_configure_request(ack_sent, true, State),
@@ -804,7 +810,7 @@ ack_sent(Event, _From, State) ->
     reply({error, invalid}, ack_sent, State).
 
 %% -- opened -----------------------------------------
-opened({timeout, _Ref, _Msg}, State) ->
+opened({timeout, _Ref, ?TIMEOUT_MSG}, State) ->
     %% drain spurious timeout
     next_state(opened, State).
 
@@ -1232,12 +1238,18 @@ start_terminate_link(Reason, State) ->
 
 %%===================================================================
 
-rearm_timer(State = #state{timer = Timer, restart_timeout = Timeout}) ->
+rearm_timer(State) ->
+    rearm_timer(?TIMEOUT_MSG, State).
+ 
+rearm_timer(Msg, State = #state{restart_timeout = Timeout}) ->
+    rearm_timer(Msg, Timeout, State).
+
+rearm_timer(Msg, Timeout, State = #state{timer = Timer}) ->
     if is_reference(Timer) -> gen_fsm:cancel_timer(Timer);
        true -> ok
     end,
-    State#state{timer = gen_fsm:start_timer(Timeout, timeout)}.
- 
+    State#state{timer = gen_fsm:start_timer(Timeout, Msg)}.
+
 stop_timer(State = #state{timer = Timer}) ->
     if is_reference(Timer) -> gen_fsm:cancel_timer(Timer);
        true -> ok
