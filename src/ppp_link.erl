@@ -305,11 +305,11 @@ accounting_start(ipcp_up, OurOpts, HisOpts, State) ->
     spawn(fun() -> do_accounting_start(OurOpts, HisOpts, State) end),
     State.
 
-accounting_stop(Reason, State) ->
+accounting_stop(_Reason, State) ->
     spawn(fun() -> do_accounting_stop(State) end),
     State.
 
-do_accounting_start(OurOpts, HisOpts,
+do_accounting_start(_OurOpts, HisOpts,
 		    #state{peerid = PeerId}) ->
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Start},
