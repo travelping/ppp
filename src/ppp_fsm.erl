@@ -119,6 +119,7 @@
 	  conf_restart_count = 0	:: integer(),
 	  failure_count	= 0		:: integer(),
 	  restart_timeout = 0		:: integer(),
+	  term_reason			:: undefined | binary(),
 	  last_request			:: undefined | 'Terminate-Request' | 'Send-Configure-Request'
 	 }).
 
@@ -399,7 +400,7 @@ stopped(Event, _From, State) ->
 closing({timeout, _Ref, _Msg}, State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
     case get_counter(LastRequest, State) of
         Cnt when Cnt > 0 ->
-	    NewState = send_terminate_request(<<>>, State),
+	    NewState = send_terminate_request(State),
 	    next_state(closing, NewState);
 	0 ->
 	    {Reply, NewState} = this_layer_finished(State),
@@ -469,7 +470,7 @@ closing(Event, _From, State) ->
 stopping({timeout, _Ref, _Msg}, State = #state{protocol = Protocol, link = Link, last_request = LastRequest}) ->
     case get_counter(LastRequest, State) of
         Cnt when Cnt > 0 ->
-	    NewState = send_terminate_request(<<>>, State),
+	    NewState = send_terminate_request(State),
 	    next_state(stopping, NewState);
 	0 ->
 	    {Reply, NewState} = this_layer_finished(State),
@@ -555,9 +556,8 @@ req_sent(down, _From, State) ->
 req_sent(open, _From, State) ->
     reply(ok, req_sent, State);
 req_sent({close, Reason}, _From, State) ->
-    State1 = initialize_restart_count(State),
-    State2 = send_terminate_request(Reason, State1),
-    reply(ok, closing, State2);
+    NewState = start_terminate_link(Reason, State),
+    reply(ok, closing, NewState);
 
 %% RCR+, RCR-
 req_sent({_, 'CP-Configure-Request', Id, Options}, _From, State) ->
@@ -645,9 +645,8 @@ ack_rcvd(down, _From, State) ->
 ack_rcvd(open, _From, State) ->
     reply(ok, ack_rcvd, State);
 ack_rcvd({close, Reason}, _From, State) ->
-    State1 = initialize_restart_count(State),
-    State2 = send_terminate_request(Reason, State1),
-    reply(ok, closing, State2);
+    NewState = start_terminate_link(Reason, State),
+    reply(ok, closing, NewState);
 
 %% RCR+, RCR-
 ack_rcvd({_, 'CP-Configure-Request', Id, Options}, _From, State) ->
@@ -733,9 +732,8 @@ ack_sent(down, _From, State) ->
 ack_sent(open, _From, State) ->
     reply(ok, ack_sent, State);
 ack_sent({close, Reason}, _From, State) ->
-    State1 = initialize_restart_count(State),
-    State2 = send_terminate_request(Reason, State1),
-    reply(ok, closing, State2);
+    NewState = start_terminate_link(Reason, State),
+    reply(ok, closing, NewState);
 
 %% RCR+, RCR-
 ack_sent({_, 'CP-Configure-Request', Id, Options}, _From, State) ->
@@ -818,9 +816,8 @@ opened(open, _From, State) ->
 %%   [r]   Restart option; see Open event discussion.
     reply(ok, opened, State);
 opened({close, Reason}, _From, State) ->
-    State1 = initialize_restart_count(State),
-    State2 = send_terminate_request(Reason, State1),
-    reply(ok, closing, State2);
+    NewState = start_terminate_link(Reason, State),
+    reply(ok, closing, NewState);
 
 %% RCR+, RCR-
 opened({_, 'CP-Configure-Request', Id, Options}, _From, State) ->
@@ -870,9 +867,8 @@ opened({_, 'CP-Terminate-Ack', _Id, _Data}, _From, State) ->
 %% RXJ-
 opened({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
     {Reply, NewState0} = this_layer_down(State),
-    NewState1 = initialize_restart_count(NewState0),
-    NewState2 = send_terminate_request(<<>>, NewState1),
-    reply(Reply, stopping, NewState2);
+    NewState1 = start_terminate_link(<<>>, NewState0),
+    reply(Reply, stopping, NewState1);
 
 %% %% RXJ+
 %% opened({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
@@ -881,9 +877,8 @@ opened({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
 %% RXJ-
 opened({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
     {Reply, NewState0} = this_layer_down(State),
-    NewState1 = initialize_restart_count(NewState0),
-    NewState2 = send_terminate_request(<<>>, NewState1),
-    reply(Reply, stopping, NewState2);
+    NewState1 = start_terminate_link(<<>>, NewState0),
+    reply(Reply, stopping, NewState1);
 
 %% RXR
 opened({_, 'CP-Discard-Request', _Id}, _From, State) ->
@@ -1231,6 +1226,10 @@ zero_restart_count(State = #state{config = Config}) ->
 		failure_count = 0,
 		restart_timeout = Config#fsm_config.restart_timeout}.
 
+start_terminate_link(Reason, State) ->
+    NewState = initialize_restart_count(State),
+    send_terminate_request(NewState#state{term_reason = Reason}).
+
 %%===================================================================
 
 rearm_timer(State = #state{timer = Timer, restart_timeout = Timeout}) ->
@@ -1269,11 +1268,11 @@ send_configure_nak(Id, Options, State = #state{protocol = Protocol}) ->
 send_configure_reject(Id, Options, State = #state{protocol = Protocol}) ->
     send_packet({Protocol, 'CP-Configure-Reject', Id, Options}, State).
 
-send_terminate_request(Data, State = #state{protocol = Protocol, reqid = Id}) ->
+send_terminate_request(State = #state{protocol = Protocol, reqid = Id, term_reason = Reason}) ->
     NewState0 = rearm_timer(State),
     NewState1 = NewState0#state{last_request = 'Terminate-Request'},
     NewState2 = dec_counter('Terminate-Request', NewState1),
-    send_packet({Protocol, 'CP-Terminate-Request', Id + 1, Data}, NewState2#state{reqid = Id + 1}).
+    send_packet({Protocol, 'CP-Terminate-Request', Id + 1, Reason}, NewState2#state{reqid = Id + 1}).
 
 send_terminate_ack(Id, Data, State = #state{protocol = Protocol}) ->
     send_packet({Protocol, 'CP-Terminate-Ack', Id, Data}, State).
