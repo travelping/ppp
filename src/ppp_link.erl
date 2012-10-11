@@ -189,9 +189,10 @@ terminating({packet_in, Frame}, State = #state{lcp = LCP})
 	    {next_state, terminating, State}
     end;
 
-terminating({layer_finished, lcp, terminated}, State) ->
+terminating({layer_finished, lcp, terminated}, State = #state{transport = Transport}) ->
     io:format("LCP in phase terminating got: terminated~n"),
     %% TODO: might want to restart LCP.....
+    transport_terminate(Transport),
     {stop, normal, State}.
 
 handle_event({packet_out, Frame}, StateName, State = #state{transport = Transport}) ->
@@ -222,6 +223,9 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 
 transport_send({TransportModule, TransportRef}, Data) ->
     TransportModule:send(TransportRef, Data).
+
+transport_terminate({TransportModule, TransportRef}) ->
+    TransportModule:terminate(TransportRef).
 
 lowerup(#state{pap = PAP, ipcp = IPCP}) ->
     ppp_pap:lowerup(PAP),
