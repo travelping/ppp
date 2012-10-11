@@ -204,7 +204,9 @@ init([Link, Config, ProtoMod]) ->
 %% -- initial ----------------------------------------
 initial({timeout, _Ref, ?TIMEOUT_MSG}, State) ->
     %% drain spurious timeout
-    next_state(initial, State).
+    next_state(initial, State);
+initial(Event, State) ->
+    proto_cb_event(Event, initial, State).
 
 initial(up, _From, State) ->
     reply(ok, closed, State);
@@ -216,8 +218,7 @@ initial({close, _}, _From, State) ->
 
 initial(Frame, _From, State)
   when ?IS_PROTOCOL_FRAME(Frame, State) ->
-    ignore_frame_in(initial, Frame),
-    reply(ok, initial, State);
+    proto_cb_frame(Frame, initial, State);
 
 initial(Event, _From, State) ->
     invalid_event(initial, Event),
@@ -226,7 +227,9 @@ initial(Event, _From, State) ->
 %% -- starting ---------------------------------------
 starting({timeout, _Ref, ?TIMEOUT_MSG}, State) ->
     %% drain spurious timeout
-    next_state(starting, State).
+    next_state(starting, State);
+starting(Event, State) ->
+    proto_cb_event(Event, starting, State).
 
 starting(up, _From, State = #state{config = #fsm_config{silent = true}}) ->
     reply(ok, stopped, State);
@@ -243,8 +246,7 @@ starting({close, _}, _From, State) ->
 
 starting(Frame, _From, State)
   when ?IS_PROTOCOL_FRAME(Frame, State) ->
-    ignore_frame_in(starting, Frame),
-    reply(ok, starting, State);
+    proto_cb_frame(Frame, starting, State);
 
 starting(Event, _From, State) ->
     invalid_event(starting, Event),
@@ -253,7 +255,9 @@ starting(Event, _From, State) ->
 %% -- closed -----------------------------------------
 closed({timeout, _Ref, ?TIMEOUT_MSG}, State) ->
     %% drain spurious timeout
-    next_state(closed, State).
+    next_state(closed, State);
+closed(Event, State) ->
+    proto_cb_event(Event, closed, State).
 
 closed(down, _From, State) ->
     reply(ok, initial, State);
@@ -310,8 +314,7 @@ closed({_, 'CP-Discard-Request', _Id}, _From, State) ->
 
 closed(Frame, _From, State)
   when ?IS_PROTOCOL_FRAME(Frame, State) ->
-    ignore_frame_in(closed, Frame),
-    reply(ok, closed, State);
+    proto_cb_frame(Frame, closed, State);
 
 closed(Event, _From, State) ->
     invalid_event(closed, Event),
@@ -320,7 +323,9 @@ closed(Event, _From, State) ->
 %% -- stopped ----------------------------------------
 stopped({timeout, _Ref, ?TIMEOUT_MSG}, State) ->
     %% drain spurious timeout
-    next_state(stopped, State).
+    next_state(stopped, State);
+stopped(Event, State) ->
+    proto_cb_event(Event, stopped, State).
 
 stopped(down, _From, State) ->
     {Reply, NewState} = this_layer_starting(State),
@@ -390,8 +395,7 @@ stopped({_, 'CP-Discard-Request', _Id}, _From, State) ->
 
 stopped(Frame, _From, State)
   when ?IS_PROTOCOL_FRAME(Frame, State) ->
-    ignore_frame_in(stopped, Frame),
-    reply(ok, stopped, State);
+    proto_cb_frame(Frame, stopped, State);
 
 stopped(Event, _From, State) ->
     invalid_event(stopped, Event),
@@ -408,7 +412,9 @@ closing({timeout, _Ref, ?TIMEOUT_MSG},
 	    {Reply, NewState} = this_layer_finished(State),
 	    ppp_link:layer_finished(Link, Protocol, Reply),
 	    next_state(closed, NewState)
-    end.
+    end;
+closing(Event, State) ->
+    proto_cb_event(Event, closing, State).
 
 closing(down, _From, State) ->
     reply(ok, initial, State);
@@ -461,8 +467,7 @@ closing({_, 'CP-Discard-Request', _Id}, _From, State) ->
 
 closing(Frame, _From, State)
   when ?IS_PROTOCOL_FRAME(Frame, State) ->
-    ignore_frame_in(closing, Frame),
-    reply(ok, closing, State);
+    proto_cb_frame(Frame, closing, State);
 
 closing(Event, _From, State) ->
     invalid_event(closing, Event),
@@ -479,7 +484,9 @@ stopping({timeout, _Ref, ?TIMEOUT_MSG},
 	    {Reply, NewState} = this_layer_finished(State),
 	    ppp_link:layer_finished(Link, Protocol, Reply),
 	    next_state(stopped, NewState)
-    end.
+    end;
+stopping(Event, State) ->
+    proto_cb_event(Event, stopping, State).
 
 stopping(down, _From, State) ->
     reply(ok, starting, State);
@@ -532,8 +539,7 @@ stopping({_, 'CP-Discard-Request', _Id}, _From, State) ->
 
 stopping(Frame, _From, State)
   when ?IS_PROTOCOL_FRAME(Frame, State) ->
-    ignore_frame_in(stopping, Frame),
-    reply(ok, stopping, State);
+    proto_cb_frame(Frame, stopping, State);
 
 stopping(Event, _From, State) ->
     invalid_event(stopping, Event),
@@ -556,7 +562,9 @@ req_sent({timeout, _Ref, ?TIMEOUT_MSG},
 
 	    ppp_link:layer_finished(Link, Protocol, Reply),
 	    next_state(stopped, NewState)
-    end.
+    end;
+req_sent(Event, State) ->
+    proto_cb_event(Event, req_sent, State).
 
 req_sent(down, _From, State) ->
     reply(ok, starting, State);
@@ -625,8 +633,7 @@ req_sent({_, 'CP-Discard-Request', _Id}, _From, State) ->
 
 req_sent(Frame, _From, State)
   when ?IS_PROTOCOL_FRAME(Frame, State) ->
-    ignore_frame_in(req_sent, Frame),
-    reply(ok, req_sent, State);
+    proto_cb_frame(Frame, req_sent, State);
 
 req_sent(Event, _From, State) ->
     invalid_event(req_sent, Event),
@@ -649,7 +656,9 @@ ack_rcvd({timeout, _Ref, ?TIMEOUT_MSG},
 
 	    ppp_link:layer_finished(Link, Protocol, Reply),
 	    next_state(stopped, NewState)
-    end.
+    end;
+ack_rcvd(Event, State) ->
+    proto_cb_event(Event, ack_rcvd, State).
 
 ack_rcvd(down, _From, State) ->
     reply(ok, starting, State);
@@ -716,8 +725,7 @@ ack_rcvd({_, 'CP-Discard-Request', _Id}, _From, State) ->
 
 ack_rcvd(Frame, _From, State)
   when ?IS_PROTOCOL_FRAME(Frame, State) ->
-    ignore_frame_in(ack_rcvd, Frame),
-    reply(ok, ack_rcvd, State);
+    proto_cb_frame(Frame, ack_rcvd, State);
 
 ack_rcvd(Event, _From, State) ->
     invalid_event(ack_rcvd, Event),
@@ -740,7 +748,9 @@ ack_sent({timeout, _Ref, ?TIMEOUT_MSG},
 
 	    ppp_link:layer_finished(Link, Protocol, Reply),
 	    next_state(stopped, NewState)
-    end.
+    end;
+ack_sent(Event, State) ->
+    proto_cb_event(Event, ack_sent, State).
 
 ack_sent(down, _From, State) ->
     reply(ok, starting, State);
@@ -811,8 +821,7 @@ ack_sent({_, 'CP-Discard-Request', _Id}, _From, State) ->
 
 ack_sent(Frame, _From, State)
   when ?IS_PROTOCOL_FRAME(Frame, State) ->
-    ignore_frame_in(ack_sent, Frame),
-    reply(ok, ack_sent, State);
+    proto_cb_frame(Frame, ack_sent, State);
 
 ack_sent(Event, _From, State) ->
     invalid_event(ack_sent, Event),
@@ -824,7 +833,9 @@ opened({close, Reason}, State) ->
     next_state(closing, NewState);
 opened({timeout, _Ref, ?TIMEOUT_MSG}, State) ->
     %% drain spurious timeout
-    next_state(opened, State).
+    next_state(opened, State);
+opened(Event, State) ->
+    proto_cb_event(Event, opened, State).
 
 opened(down, _From, State) ->
     {Reply, NewState} = this_layer_down(State),
@@ -904,7 +915,7 @@ opened({_, 'CP-Discard-Request', _Id}, _From, State) ->
 
 opened(Frame, _From, State)
   when ?IS_PROTOCOL_FRAME(Frame, State) ->
-    cb_unhandled_frame(Frame, opened, State);
+    proto_cb_frame(Frame, opened, State);
 
 opened(Event, _From, State) ->
     invalid_event(opened, Event),
@@ -982,9 +993,7 @@ handle_sync_event(Msg, From, StateName, State)
 %% RUC
 handle_sync_event(Msg, _From, StateName, State)
   when  ?IS_PROTOCOL_FRAME(Msg, State) ->
-%% TODO: let the CallBack Module handle extended codes....
-    NewState = send_code_reject(Msg, State),
-    reply(ok, StateName, NewState);
+    proto_cb_frame(Msg, StateName, reject, State);
 
 handle_sync_event({lower, Event}, From, StateName, State) ->
     lower_event(Event, From, StateName, State);
@@ -1012,25 +1021,66 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%===================================================================
 %% callbacks
 
-cb_unhandled_frame(Frame, StateName, State = #state{protocol_mod = ProtoMod, protocol_state = ProtoState}) ->
-    try ProtoMod:StateName(Frame, ProtoState) of
+proto_cb(Module, Function, Args)
+  when is_list(Args) ->
+    case erlang:function_exported(Module, Function, length(Args)) of
+	true ->
+	    try
+		apply(Module, Function, Args)
+	    catch
+		error:function_clause ->
+		    {error, function_clause}
+	    end;
+	_ ->
+	    {error, function_clause}
+    end.
+
+proto_cb_event(Event, StateName, State = #state{protocol_mod = ProtoMod, protocol_state = ProtoState, reqid = ReqId}) ->
+    case proto_cb(ProtoMod, StateName, [Event, ReqId, ProtoState]) of
+	{send, Request, NewReqId, NewStateName, NewProtoState} ->
+	    NewState0 = State#state{protocol_state = NewProtoState, reqid = NewReqId},
+	    NewState1 = send_packet(Request, NewState0),
+	    next_state(NewStateName, NewState1);
+	{next_state, NewStateName, NewProtoState} ->
+	    NewState0 = State#state{protocol_state = NewProtoState},
+	    next_state(NewStateName, NewState0);
+	{close, Reason, NewProtoState} ->
+	    NewState0 = State#state{protocol_state = NewProtoState},
+	    ?MODULE:StateName({close, Reason}, NewState0);
+	{stop, Reason, NewProtoState} ->
+	    NewState0 = State#state{protocol_state = NewProtoState},
+	    {stop, Reason, NewState0};
+	 {error, function_clause} ->
+	    %% ignore the event
+	    next_state(StateName, State)
+    end.
+
+proto_cb_frame(Frame, StateName, State) ->
+    proto_cb_frame(Frame, StateName, ignore, State).
+
+proto_cb_frame(Frame, StateName, DefaultAction, 
+	       State = #state{protocol_mod = ProtoMod, protocol_state = ProtoState}) ->
+    case proto_cb(ProtoMod, StateName, [Frame, ProtoState]) of
 	{send_reply, NewStateName, Reply, NewProtoState} ->
 	    NewState0 = State#state{protocol_state = NewProtoState},
 	    NewState1 = send_packet(Reply, NewState0),
 	    reply(ok, NewStateName, NewState1);
-	{ignore, NewStateName, NewProtoState} ->
-	    ignore_frame_in(StateName, Frame),
-	    NewState = State#state{protocol_state = NewProtoState},
-	    reply(ok, NewStateName, NewState);
 	{Reply, NewStateName, NewProtoState} ->
-	    NewState = State#state{protocol_state = NewProtoState},
-	    reply(Reply, NewStateName, NewState)
-    catch
-	_:_ -> 
-	    ignore_frame_in(StateName, Frame),
-	    reply(ok, StateName, State)
+	    proto_cb_reply(Reply, Frame, NewStateName,
+			   State#state{protocol_state = NewProtoState});
+	{error, function_clause} ->
+	    proto_cb_reply(DefaultAction, Frame, StateName, State)
     end.
-     
+
+proto_cb_reply(reject, Frame, StateName, State) ->
+    NewState = send_code_reject(Frame, State),
+    reply(ok, StateName, NewState);
+proto_cb_reply(ignore, Frame, StateName, State) ->
+    ignore_frame_in(StateName, Frame),
+    reply(ok, StateName, State);
+proto_cb_reply(Reply, _Frame, StateName, State) ->
+    reply(Reply, StateName, State).
+
 lower_event(Event, From, StateName, State = #state{protocol_mod = ProtoMod, protocol_state = ProtoState}) ->
     ProtoMod:handler_lower_event(Event, {From, StateName, State}, ProtoState).
 
