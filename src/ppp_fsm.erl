@@ -828,7 +828,8 @@ ack_sent(Event, _From, State) ->
     reply({error, invalid}, ack_sent, State).
 
 %% -- opened -----------------------------------------
-opened({close, Reason}, State) ->
+opened({close, Reason}, State = #state{protocol = Protocol, link = Link}) ->
+    ppp_link:layer_down(Link, Protocol, Reason),
     NewState = start_terminate_link(Reason, State),
     next_state(closing, NewState);
 opened({timeout, _Ref, ?TIMEOUT_MSG}, State) ->
@@ -844,7 +845,8 @@ opened(open, _From, State) ->
 %% TODO:
 %%   [r]   Restart option; see Open event discussion.
     reply(ok, opened, State);
-opened({close, Reason}, _From, State) ->
+opened({close, Reason}, _From, State = #state{protocol = Protocol, link = Link}) ->
+    ppp_link:layer_down(Link, Protocol, Reason),
     NewState = start_terminate_link(Reason, State),
     reply(ok, closing, NewState);
 

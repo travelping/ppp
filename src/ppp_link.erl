@@ -174,7 +174,13 @@ network({packet_in, Frame}, State = #state{ipcp = IPCP})
 	Reply when is_tuple(Reply) ->
 	    io:format("IPCP in phase network got: ~p~n", [Reply]),
 	    {next_state, network, State}
-    end.
+    end;
+
+network({layer_down, lcp, Reason}, State) ->
+    State1 = accounting_stop(down, State),
+    lowerdown(State1),
+    lowerclose(Reason, State1),
+    lcp_down(State1).
 
 terminating({packet_in, Frame}, State = #state{lcp = LCP})
   when element(1, Frame) == lcp ->
@@ -235,6 +241,11 @@ lowerup(#state{pap = PAP, ipcp = IPCP}) ->
 lowerdown(#state{pap = PAP, ipcp = IPCP}) ->
     ppp_pap:lowerdown(PAP),
     ppp_ipcp:lowerdown(IPCP),
+    ok.
+
+lowerclose(Reason, #state{pap = PAP, ipcp = IPCP}) ->
+    ppp_pap:lowerclose(PAP, Reason),
+    ppp_ipcp:lowerclose(IPCP, Reason),
     ok.
 
 do_auth_peer([], State) ->
