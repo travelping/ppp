@@ -46,7 +46,7 @@ init([]) ->
 
 handle_register(Pid, SessionId, _, State) ->
     ets:insert(?SERVER, {SessionId, Pid}),
-    {ok, [Pid], State}.
+    {ok, [SessionId], State}.
 
 handle_unregister(SessionId, _, State) ->
     Pids = ets:lookup(?SERVER, SessionId),
