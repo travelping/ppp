@@ -19,6 +19,7 @@
 -include_lib("eradius/include/dictionary.hrl").
 
 -define(SERVER, ?MODULE).
+-define(DEFAULT_INTERIM, 10).
 
 -record(state, {
 	  config		:: list(),         		%% config options proplist
@@ -33,7 +34,14 @@
 	  peerid = <<>>		:: binary(),
 
 	  our_lcp_opts		:: #lcp_opts{}, 		%% Options that peer ack'd
-	  his_lcp_opts		:: #lcp_opts{}			%% Options that we ack'd
+	  his_lcp_opts		:: #lcp_opts{},			%% Options that we ack'd
+
+								%% Accounting data
+	  accounting_start	:: integer(),			%% Session Start Time in Ticks
+	  our_ipcp_opts		:: #lcp_opts{}, 		%% Options that peer ack'd
+	  his_ipcp_opts		:: #lcp_opts{},			%% Options that we ack'd
+	  interim_ref		:: reference()			%% Interim-Accouting Timer
+
 	 }).
 
 %%%===================================================================
@@ -144,6 +152,10 @@ auth({packet_in, Frame}, State) ->
     io:format("non-Auth Frame: ~p, ignoring~n", [Frame]),
     {next_state, auth, State}.
 
+network(interim_accounting, State) ->
+    NewState = accounting_interim(State),
+    {next_state, network, NewState};
+
 network({packet_in, Frame}, State = #state{lcp = LCP})
   when element(1, Frame) == lcp ->
     io:format("LCP Frame in phase network: ~p~n", [Frame]),
@@ -181,6 +193,9 @@ network({layer_down, lcp, Reason}, State) ->
     lowerdown(State1),
     lowerclose(Reason, State1),
     lcp_down(State1).
+
+terminating(interim_accounting, State) ->
+    {next_state, terminating, State};
 
 terminating({packet_in, Frame}, State = #state{lcp = LCP})
   when element(1, Frame) == lcp ->
@@ -232,6 +247,9 @@ transport_send({TransportModule, TransportRef}, Data) ->
 
 transport_terminate({TransportModule, TransportRef}) ->
     TransportModule:terminate(TransportRef).
+
+transport_get_counter({TransportModule, TransportRef}, IP) ->
+    TransportModule:get_counter(TransportRef, IP).
 
 lowerup(#state{pap = PAP, ipcp = IPCP}) ->
     ppp_pap:lowerup(PAP),
@@ -311,17 +329,36 @@ np_open(State0 = #state{config = Config}) ->
 accounting_start(init, State) ->
     State.
 
-accounting_start(ipcp_up, OurOpts, HisOpts, State) ->
+accounting_start(ipcp_up, OurOpts, HisOpts,
+		 State = #state{config = Config}) ->
+    NewState0 = State#state{accounting_start = now_ticks(), our_ipcp_opts = OurOpts, his_ipcp_opts = HisOpts},
     io:format("--------------------------~nAccounting: OPEN~n--------------------------~n"),
-    spawn(fun() -> do_accounting_start(OurOpts, HisOpts, State) end),
+    spawn(fun() -> do_accounting_start(NewState0) end),
+    InterimAccounting = proplists:get_value(interim_accounting, Config, ?DEFAULT_INTERIM),
+    Ref = gen_fsm:send_event_after(InterimAccounting * 1000, interim_accounting),
+    NewState0#state{interim_ref = Ref}.
+
+accounting_interim(State = #state{accounting_start = Start,
+				  config = Config}) ->
+    Now = now_ticks(),
+    InterimAccounting = proplists:get_value(interim_accounting, Config, ?DEFAULT_INTERIM) * 10,
+    %% avoid time drifts...
+    Next = InterimAccounting - (Now - Start) rem InterimAccounting,
+    Ref = gen_fsm:send_event_after(InterimAccounting * 100, interim_accounting),
+
+    io:format("--------------------------~nAccounting: Interim~nNext: ~p~n--------------------------~n", [Next]),
+    spawn(fun() -> do_accounting_interim(Now, State) end),
+    State#state{interim_ref = Ref}.
+
+accounting_stop(_Reason,
+		State = #state{interim_ref = Ref}) ->
+    Now = now_ticks(),
+    gen_fsm:cancel_timer(Ref),
+    spawn(fun() -> do_accounting_stop(Now, State) end),
     State.
 
-accounting_stop(_Reason, State) ->
-    spawn(fun() -> do_accounting_stop(State) end),
-    State.
-
-do_accounting_start(_OurOpts, HisOpts,
-		    #state{peerid = PeerId}) ->
+do_accounting_start(#state{peerid = PeerId,
+			   his_ipcp_opts = HisOpts}) ->
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Start},
 	     {?User_Name, PeerId},
@@ -336,12 +373,19 @@ do_accounting_start(_OurOpts, HisOpts,
     {ok, NAS} = application:get_env(radius_acct_server),
     eradius_client:send_request(NAS, Req).
 
-do_accounting_stop(#state{peerid = PeerId}) ->
+do_accounting_interim(Now, #state{transport = Transport,
+				  peerid = PeerId,
+				  accounting_start = Start,
+				  his_ipcp_opts = HisOpts}) ->
+    io:format("do_accounting_interim~n"),
+    Counter = transport_get_counter(Transport, HisOpts#ipcp_opts.hisaddr),
     Attrs = [
-	     {?RStatus_Type, ?RStatus_Type_Stop},
+	     {?RStatus_Type, ?RStatus_Type_Update},
 	     {?User_Name, PeerId},
 	     {?Service_Type, 2},
-	     {?Framed_Protocol, 1}
+	     {?Framed_Protocol, 1},
+	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
+	     {?RSession_Time, round((Now - Start) / 10)}
 	    ],
     Req = #radius_request{
 	     cmd = accreq,
@@ -349,3 +393,30 @@ do_accounting_stop(#state{peerid = PeerId}) ->
 	     msg_hmac = true},
     {ok, NAS} = application:get_env(radius_acct_server),
     eradius_client:send_request(NAS, Req).
+
+do_accounting_stop(Now, #state{transport = Transport,
+			       peerid = PeerId,
+			       accounting_start = Start,
+			       his_ipcp_opts = HisOpts}) ->
+    io:format("do_accounting_stop~n"),
+    Counter = transport_get_counter(Transport, HisOpts#ipcp_opts.hisaddr),
+    Attrs = [
+	     {?RStatus_Type, ?RStatus_Type_Stop},
+	     {?User_Name, PeerId},
+	     {?Service_Type, 2},
+	     {?Framed_Protocol, 1},
+	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
+	     {?RSession_Time, round((Now - Start) / 10)}
+	    ],
+    Req = #radius_request{
+	     cmd = accreq,
+	     attrs = Attrs,
+	     msg_hmac = true},
+    {ok, NAS} = application:get_env(radius_acct_server),
+    eradius_client:send_request(NAS, Req).
+
+
+%% get time with 100ms +/50ms presision
+now_ticks() ->
+    {MegaSecs, Secs, MicroSecs} = erlang:now(),
+    MegaSecs * 10000000 + Secs * 10 + round(MicroSecs div 100000).

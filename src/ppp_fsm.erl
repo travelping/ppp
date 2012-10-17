@@ -1147,6 +1147,8 @@ ignore_frame_in(StateName, Frame) ->
 invalid_event(StateName, Event) ->
     io:format("invalid event ~p in state ~p~n", [Event, StateName]).
 
+get_counter('Terminate-Ack', _State) ->
+    0;
 get_counter('Terminate-Request', State) ->
     State#state.term_restart_count;
 get_counter('Configure-Request', State) ->
@@ -1351,7 +1353,9 @@ send_terminate_request(State = #state{protocol = Protocol, reqid = Id, term_reas
     send_packet({Protocol, 'CP-Terminate-Request', Id + 1, Reason}, NewState2#state{reqid = Id + 1}).
 
 send_terminate_ack(Id, Data, State = #state{protocol = Protocol}) ->
-    send_packet({Protocol, 'CP-Terminate-Ack', Id, Data}, State).
+    NewState0 = rearm_timer(State),
+    NewState1 = NewState0#state{last_request = 'Terminate-Ack'},
+    send_packet({Protocol, 'CP-Terminate-Ack', Id, Data}, NewState1).
 
 send_code_reject(Request, State = #state{protocol = Protocol}) ->
     send_packet({Protocol, 'CP-Code-Reject', element(3, Request), Request}, State).
