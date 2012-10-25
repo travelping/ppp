@@ -434,6 +434,7 @@ do_accounting_start(#state{config = Config,
 	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
+	     {?NAS_Port_Type, 34},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr}
 	     | accounting_attrs(Accounting, [])],
     Req = #radius_request{
@@ -460,6 +461,7 @@ do_accounting_interim(Now, #state{config = Config,
 	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
+	     {?NAS_Port_Type, 34},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
 	     {?RSession_Time, round((Now - Start) / 10)}
 	     | accounting_attrs(Accounting, [])],
@@ -487,6 +489,7 @@ do_accounting_stop(Now, #state{config = Config,
 	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
+	     {?NAS_Port_Type, 34},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
 	     {?RSession_Time, round((Now - Start) / 10)}
 	     | accounting_attrs(Accounting, [])],

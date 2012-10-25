@@ -450,7 +450,8 @@ check_passwd(PeerId, Passwd, #state{accounting = Accounting}) ->
 	     {?User_Name, PeerId},
 	     {?User_Password , Passwd},
 	     {?Service_Type, 2},
-	     {?Framed_Protocol, 1}
+	     {?Framed_Protocol, 1},
+	     {?NAS_Port_Type, 34}
 	     | ppp_link:accounting_attrs(Accounting, [])],
     Req = #radius_request{
 	     cmd = request,
