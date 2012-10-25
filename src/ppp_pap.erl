@@ -446,11 +446,13 @@ send_authentication_nak(Id, Msg, State) ->
 %%     fail.
 
 check_passwd(PeerId, Passwd, #state{accounting = Accounting}) ->
+    {ok, NasId} = application:get_env(nas_identifier),
     Attrs = [
 	     {?User_Name, PeerId},
 	     {?User_Password , Passwd},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
+	     {?NAS_Identifier, NasId},
 	     {?NAS_Port_Type, 34}
 	     | ppp_link:accounting_attrs(Accounting, [])],
     Req = #radius_request{

@@ -429,11 +429,13 @@ do_accounting_start(#state{config = Config,
 		   undefined -> PeerId;
 		   Value -> Value
 	       end,
+    {ok, NasId} = application:get_env(nas_identifier),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Start},
 	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
+	     {?NAS_Identifier, NasId},
 	     {?NAS_Port_Type, 34},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr}
 	     | accounting_attrs(Accounting, [])],
@@ -456,11 +458,13 @@ do_accounting_interim(Now, #state{config = Config,
 		   Value -> Value
 	       end,
     Counter = transport_get_counter(Transport, HisOpts#ipcp_opts.hisaddr),
+    {ok, NasId} = application:get_env(nas_identifier),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Update},
 	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
+	     {?NAS_Identifier, NasId},
 	     {?NAS_Port_Type, 34},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
 	     {?RSession_Time, round((Now - Start) / 10)}
@@ -484,11 +488,13 @@ do_accounting_stop(Now, #state{config = Config,
 		   Value -> Value
 	       end,
     Counter = transport_get_counter(Transport, HisOpts#ipcp_opts.hisaddr),
+    {ok, NasId} = application:get_env(nas_identifier),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Stop},
 	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
+	     {?NAS_Identifier, NasId},
 	     {?NAS_Port_Type, 34},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
 	     {?RSession_Time, round((Now - Start) / 10)}
