@@ -374,15 +374,22 @@ accounting_stop(_Reason,
     spawn(fun() -> do_accounting_stop(Now, State) end),
     State.
 
-do_accounting_start(#state{peerid = PeerId,
+accounting_attrs([], Attrs) ->
+    Attrs;
+accounting_attrs([_|Rest], Attrs) ->
+    accounting_attrs(Rest, Attrs).
+
+do_accounting_start(#state{config = Config,
+			   peerid = PeerId,
 			   his_ipcp_opts = HisOpts}) ->
+    Accounting = proplists:get_value(accounting, Config, []),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Start},
 	     {?User_Name, PeerId},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr}
-	    ],
+	     | accounting_attrs(Accounting, [])],
     Req = #radius_request{
 	     cmd = accreq,
 	     attrs = Attrs,
@@ -390,11 +397,13 @@ do_accounting_start(#state{peerid = PeerId,
     {ok, NAS} = application:get_env(radius_acct_server),
     eradius_client:send_request(NAS, Req).
 
-do_accounting_interim(Now, #state{transport = Transport,
+do_accounting_interim(Now, #state{config = Config,
+				  transport = Transport,
 				  peerid = PeerId,
 				  accounting_start = Start,
 				  his_ipcp_opts = HisOpts}) ->
     io:format("do_accounting_interim~n"),
+    Accounting = proplists:get_value(accounting, Config, []),
     Counter = transport_get_counter(Transport, HisOpts#ipcp_opts.hisaddr),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Update},
@@ -403,7 +412,7 @@ do_accounting_interim(Now, #state{transport = Transport,
 	     {?Framed_Protocol, 1},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
 	     {?RSession_Time, round((Now - Start) / 10)}
-	    ],
+	     | accounting_attrs(Accounting, [])],
     Req = #radius_request{
 	     cmd = accreq,
 	     attrs = Attrs,
@@ -411,11 +420,13 @@ do_accounting_interim(Now, #state{transport = Transport,
     {ok, NAS} = application:get_env(radius_acct_server),
     eradius_client:send_request(NAS, Req).
 
-do_accounting_stop(Now, #state{transport = Transport,
+do_accounting_stop(Now, #state{config = Config,
+			       transport = Transport,
 			       peerid = PeerId,
 			       accounting_start = Start,
 			       his_ipcp_opts = HisOpts}) ->
     io:format("do_accounting_stop~n"),
+    Accounting = proplists:get_value(accounting, Config, []),
     Counter = transport_get_counter(Transport, HisOpts#ipcp_opts.hisaddr),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Stop},
@@ -424,7 +435,7 @@ do_accounting_stop(Now, #state{transport = Transport,
 	     {?Framed_Protocol, 1},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
 	     {?RSession_Time, round((Now - Start) / 10)}
-	    ],
+	     | accounting_attrs(Accounting, [])],
     Req = #radius_request{
 	     cmd = accreq,
 	     attrs = Attrs,

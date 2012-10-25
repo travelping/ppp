@@ -483,6 +483,10 @@ process_radius_attrs(Fun, Verdict, #radius_request{attrs = Attrs}) ->
 process_pap_attrs(AVP, {_Verdict, _Opts} = Acc0) ->
     process_gen_attrs(AVP, Acc0).
 
+append_accounting_opt(Opt, Opts) ->
+    Accounting = proplists:get_value(accounting, Opts, []),
+    lists:keystore(accounting, 1, Opts, {accounting, [Opt|Accounting]}).
+
 %% Service-Type = Framed-User
 process_gen_attrs({#attribute{id = ?Service_Type}, 2}, {_Verdict, _Opts} = Acc0) ->
     Acc0;
@@ -507,6 +511,10 @@ process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {A, B, C, D}}, {Verdict,
 
 process_gen_attrs({#attribute{name = Name}, Value} , {_Verdict, _Opts} = Acc0) ->
     io:format("unhandled reply AVP: ~s: ~p~n", [Name, Value]),
+    Acc0;
+
+process_gen_attrs({Attr, Value} , {_Verdict, _Opts} = Acc0) ->
+    io:format("unhandled undecoded reply AVP: ~s: ~p~n", [Attr, Value]),
     Acc0.
 
 process_unexpected_value({#attribute{name = Name}, Value} , {_Verdict, Opts}) ->
