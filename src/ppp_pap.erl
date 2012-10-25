@@ -496,19 +496,19 @@ process_gen_attrs(AVP = {#attribute{id = ?Framed_Protocol}, _}, Acc0) ->
     process_unexpected_value(AVP, Acc0);
 
 %% Framed-IP-Address = xx.xx.xx.xx
-process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {255,255,255,255}}, {Verdict, Opts} = _Acc0) ->
+process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {255,255,255,255}}, {Verdict, Opts}) ->
     %% user should be allowed to select one
     {Verdict, [{ipcp_hisaddr, <<0,0,0,0>>}, {accept_remote, true}|Opts]};
-process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {255,255,255,254}}, {Verdict, Opts} = _Acc0) ->
+process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {255,255,255,254}}, {Verdict, Opts}) ->
     %% NAS should select an ip address
     {Verdict, [{choose_ip, true}, {accept_remote, false}|Opts]};
-process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {A, B, C, D}}, {Verdict, Opts} = _Acc0) ->
+process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {A, B, C, D}}, {Verdict, Opts}) ->
     {Verdict, [{ipcp_hisaddr, <<A, B, C, D>>}, {accept_remote, false}|Opts]};
 
 process_gen_attrs({#attribute{name = Name}, Value} , {_Verdict, _Opts} = Acc0) ->
     io:format("unhandled reply AVP: ~s: ~p~n", [Name, Value]),
     Acc0.
 
-process_unexpected_value({#attribute{name = Name}, Value} , {_Verdict, Opts} = _Acc0) ->
+process_unexpected_value({#attribute{name = Name}, Value} , {_Verdict, Opts}) ->
     io:format("unexpected Value in AVP: ~s: ~p~n", [Name, Value]),
     {fail, Opts}.
