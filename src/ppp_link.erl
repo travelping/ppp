@@ -20,6 +20,7 @@
 -include("ppp_ipcp.hrl").
 -include_lib("eradius/include/eradius_lib.hrl").
 -include_lib("eradius/include/dictionary.hrl").
+-include_lib("eradius/include/dictionary_rfc4679.hrl").
 
 -define(SERVER, ?MODULE).
 -define(DEFAULT_INTERIM, 10).
@@ -381,7 +382,43 @@ accounting_attrs([], Attrs) ->
     Attrs;
 accounting_attrs([{class, Class}|Rest], Attrs) ->
     accounting_attrs(Rest, [{?Class, Class}|Attrs]);
-accounting_attrs([_|Rest], Attrs) ->
+
+%% DSL-Forum PPPoE Intermediate Agent Attributes
+accounting_attrs([{'ADSL-Agent-Circuit-Id', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?ADSL_Agent_Circuit_Id, Value}|Attrs]);
+accounting_attrs([{'ADSL-Agent-Remote-Id', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?ADSL_Agent_Remote_Id, Value}|Attrs]);
+accounting_attrs([{'Actual-Data-Rate-Upstream', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Actual_Data_Rate_Upstream, Value}|Attrs]);
+accounting_attrs([{'Actual-Data-Rate-Downstream', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Actual_Data_Rate_Downstream, Value}|Attrs]);
+accounting_attrs([{'Minimum-Data-Rate-Upstream', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Minimum_Data_Rate_Upstream, Value}|Attrs]);
+accounting_attrs([{'Minimum-Data-Rate-Downstream', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Minimum_Data_Rate_Downstream, Value}|Attrs]);
+accounting_attrs([{'Attainable-Data-Rate-Upstream', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Attainable_Data_Rate_Upstream, Value}|Attrs]);
+accounting_attrs([{'Attainable-Data-Rate-Downstream', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Attainable_Data_Rate_Downstream, Value}|Attrs]);
+accounting_attrs([{'Maximum-Data-Rate-Upstream', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Maximum_Data_Rate_Upstream, Value}|Attrs]);
+accounting_attrs([{'Maximum-Data-Rate-Downstream', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Maximum_Data_Rate_Downstream, Value}|Attrs]);
+accounting_attrs([{'Minimum-Data-Rate-Upstream-Low-Power', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Minimum_Data_Rate_Upstream_Low_Power, Value}|Attrs]);
+accounting_attrs([{'Minimum-Data-Rate-Downstream-Low-Power', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Minimum_Data_Rate_Downstream_Low_Power, Value}|Attrs]);
+accounting_attrs([{'Maximum-Interleaving-Delay-Upstream', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Maximum_Interleaving_Delay_Upstream, Value}|Attrs]);
+accounting_attrs([{'Actual-Interleaving-Delay-Upstream', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Actual_Interleaving_Delay_Upstream, Value}|Attrs]);
+accounting_attrs([{'Maximum-Interleaving-Delay-Downstream', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Maximum_Interleaving_Delay_Downstream, Value}|Attrs]);
+accounting_attrs([{'Actual-Interleaving-Delay-Downstream', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Actual_Interleaving_Delay_Downstream, Value}|Attrs]);
+
+accounting_attrs([H|Rest], Attrs) ->
+    io:format("unhandled accounting attr: ~p~n", [H]),
     accounting_attrs(Rest, Attrs).
 
 do_accounting_start(#state{config = Config,
