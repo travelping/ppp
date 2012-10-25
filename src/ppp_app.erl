@@ -12,6 +12,7 @@
 %% ===================================================================
 
 start(_StartType, _StartArgs) ->
+    eradius_dict:load_tables([dictionary, dictionary_alcatel_sr]),
     ppp_sup:start_link().
 
 stop(_State) ->

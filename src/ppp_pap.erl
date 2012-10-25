@@ -21,6 +21,7 @@
 -include_lib("eradius/include/eradius_lib.hrl").
 -include_lib("eradius/include/eradius_dict.hrl").
 -include_lib("eradius/include/dictionary.hrl").
+-include_lib("eradius/include/dictionary_alcatel_sr.hrl").
 
 %% Client states.
 -type client_state() ::
@@ -513,6 +514,13 @@ process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {255,255,255,254}}, {Ver
 process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {A, B, C, D}}, {Verdict, Opts}) ->
     {Verdict, [{ipcp_hisaddr, <<A, B, C, D>>}, {accept_remote, false}|Opts]};
 
+%% Alc-Primary-Dns
+process_gen_attrs({#attribute{id = ?Alc_Primary_Dns}, DNS}, {Verdict, Opts}) ->
+    {Verdict, set_addr(ms_dns, DNS, 1, Opts)};
+%% Alc-Secondary-Dns
+process_gen_attrs({#attribute{id = ?Alc_Secondary_Dns}, DNS}, {Verdict, Opts}) ->
+    {Verdict, set_addr(ms_dns, DNS, 2, Opts)};
+
 process_gen_attrs({#attribute{name = Name}, Value} , {_Verdict, _Opts} = Acc0) ->
     io:format("unhandled reply AVP: ~s: ~p~n", [Name, Value]),
     Acc0;
@@ -524,3 +532,13 @@ process_gen_attrs({Attr, Value} , {_Verdict, _Opts} = Acc0) ->
 process_unexpected_value({#attribute{name = Name}, Value} , {_Verdict, Opts}) ->
     io:format("unexpected Value in AVP: ~s: ~p~n", [Name, Value]),
     {fail, Opts}.
+
+ip2bin({A,B,C,D}) ->
+    <<A:8, B:8, C:8, D:8>>;
+ip2bin({A,B,C,D,E,F,G,H}) ->
+    <<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>.
+
+set_addr(Key, Addr, Pos, Config) ->
+    Old = proplists:get_value(Key, Config, {<<0,0,0,0>>, <<0,0,0,0>>}),
+    New = setelement(Pos, Old, ip2bin(Addr)),
+    lists:keystore(Key, 1, Config, {Key, New}).
