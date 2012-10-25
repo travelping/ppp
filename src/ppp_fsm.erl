@@ -141,6 +141,8 @@ fsm_lowerdown(FSM) ->
 fsm_loweropen(FSM) ->
     gen_fsm:sync_send_all_state_event(FSM, {lower, open}).
 
+fsm_lowerclose(undefined, _Reason) ->
+    ok;
 fsm_lowerclose(FSM, Reason) ->
     gen_fsm:sync_send_all_state_event(FSM, {lower, {close, Reason}}).
 

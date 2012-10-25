@@ -116,6 +116,11 @@ establish({packet_in, Frame}, State) ->
     io:format("non-LCP Frame in phase establish: ~p, ignoring~n", [Frame]),
     {next_state, establish, State};
 
+establish({layer_down, lcp, Reason}, State) ->
+    lowerdown(State),
+    lowerclose(Reason, State),
+    lcp_down(State);
+
 establish({layer_finished, lcp, terminated}, State) ->
     io:format("LCP in phase establish got: terminated~n"),
     %% TODO: might want to restart LCP.....
@@ -209,6 +214,18 @@ terminating({packet_in, Frame}, State = #state{lcp = LCP})
 	    io:format("LCP in phase terminating got: ~p~n", [Reply]),
 	    {next_state, terminating, State}
     end;
+
+terminating({packet_in, Frame}, State) ->
+    %% RFC 1661, Sect. 3.4:
+    %%   Any non-LCP packets received during this phase MUST be silently
+    %%   discarded.
+    io:format("non-LCP Frame in phase terminating: ~p, ignoring~n", [Frame]),
+    {next_state, establish, State};
+
+terminating({layer_down, lcp, Reason}, State) ->
+    lowerdown(State),
+    lowerclose(Reason, State),
+    lcp_down(State);
 
 terminating({layer_finished, lcp, terminated}, State = #state{transport = Transport}) ->
     io:format("LCP in phase terminating got: terminated~n"),
