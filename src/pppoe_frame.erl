@@ -50,6 +50,25 @@ tag('Generic-Error')		-> '?GENERIC_ERROR';
 
 tag(X)				-> X.
 
+dslf_tag(16#01) -> 'ADSL-Agent-Circuit-Id';
+dslf_tag(16#02) -> 'ADSL-Agent-Remote-Id';
+dslf_tag(16#81) -> 'Actual-Data-Rate-Upstream';
+dslf_tag(16#82) -> 'Actual-Data-Rate-Downstream';
+dslf_tag(16#83) -> 'Minimum-Data-Rate-Upstream';
+dslf_tag(16#84) -> 'Minimum-Data-Rate-Downstream';
+dslf_tag(16#85) -> 'Attainable-Data-Rate-Upstream';
+dslf_tag(16#86) -> 'Attainable-Data-Rate-Downstream';
+dslf_tag(16#87) -> 'Maximum-Data-Rate-Upstream';
+dslf_tag(16#88) -> 'Maximum-Data-Rate-Downstream';
+dslf_tag(16#89) -> 'Minimum-Data-Rate-Upstream-Low-Power';
+dslf_tag(16#8a) -> 'Minimum-Data-Rate-Downstream-Low-Power';
+dslf_tag(16#8b) -> 'Maximum-Interleaving-Delay-Upstream';
+dslf_tag(16#8c) -> 'Actual-Interleaving-Delay-Upstream';
+dslf_tag(16#8d) -> 'Maximum-Interleaving-Delay-Downstream';
+dslf_tag(16#8e) -> 'Actual-Interleaving-Delay-Downstream';
+
+dslf_tag(X)				-> X.
+
 pppoe_code(?PPPOE_PPP) -> ppp;
 pppoe_code(?PPPOE_PADO) -> pado;
 pppoe_code(?PPPOE_PADI) -> padi;
@@ -77,16 +96,26 @@ decode(ppp, SessionId, PayLoad) ->
 decode(Code, SessionId, PayLoad) ->
     {Code, SessionId, decode_tlv(PayLoad)}.
 
+decode_dslf_tags(<<>>, Acc) ->
+    Acc;
+decode_dslf_tags(<<16#fe:8, 0:8>>, Acc) ->
+    Acc;
+decode_dslf_tags(<<Tag:8, Length:8, Value:Length/bytes, Rest/binary>>, Acc) ->
+    decode_dslf_tags(Rest, [{dslf, {dslf_tag(Tag), Value}}|Acc]).
+
+decode_tag(<<Vendor:32/integer, Value/binary>>, 'Vendor-Specific')
+  when Vendor == 16#DE9 ->
+    decode_dslf_tags(Value, []);
 decode_tag(<<Vendor:32/integer, Value/binary>>, Tag = 'Vendor-Specific') ->
     {Tag, Vendor, Value};
 decode_tag(Value, Tag) ->
     {Tag, Value}.
 
 decode_tlv(<<>>, Acc) ->
-    lists:reverse(Acc);
+    lists:reverse(lists:flatten(Acc));
 decode_tlv(<<0:16/integer, 0:16/integer>>, Acc) ->
     %% End-Of-List
-    lists:reverse(Acc);
+    lists:reverse(lists:flatten(Acc));
 decode_tlv(<<Tag:16/integer, Length:16/integer, Value:Length/binary, Rest/binary>>, Acc) ->
     decode_tlv(Rest, [decode_tag(Value, tag(Tag))|Acc]).
 
