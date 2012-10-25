@@ -60,7 +60,9 @@
 	  timeouttime = 0	:: integer(),		%% Timeout for auth-req retrans
 	  transmits = 0		:: integer(),		%% Number of auth-reqs sent
 	  maxtransmits = 0	:: integer(),		%% Maximum number of auth-reqs to send
-	  reqtimeout = 0	:: integer()		%% Time to wait for auth-req from peer
+	  reqtimeout = 0	:: integer(),		%% Time to wait for auth-req from peer
+
+	  accounting = []	:: list()		%% List of Accounting Attributes for RADIUS
 	 }).
 
 %%%===================================================================
@@ -109,7 +111,8 @@ init([Link, Config]) ->
       link = Link,
       timeouttime = proplists:get_value('pap-restart', Config, ?DEFTIMEOUT),
       maxtransmits = proplists:get_value('pap-max-authreq', Config, 10),
-      reqtimeout = proplists:get_value('pap-timeout', Config, ?DEFREQTIME)
+      reqtimeout = proplists:get_value('pap-timeout', Config, ?DEFREQTIME),
+      accounting = proplists:get_value(accounting, Config, [])
      },
 
     {ok, State}.
@@ -313,7 +316,7 @@ s_listen(timeout, State = #state{link = Link}) ->
 
 s_listen({pap, 'PAP-Authentication-Request', Id, PeerId, Passwd}, State) ->
     NewState0 = stop_s_timer(State),
-    case check_passwd(PeerId, Passwd) of
+    case check_passwd(PeerId, Passwd, State) of
 	{success, Opts} ->
 	    %% notice("PAP peer authentication succeeded for %q", rhostname);
 	    NewState1 = send_authentication_ack(Id, <<"">>, NewState0),
@@ -442,13 +445,13 @@ send_authentication_nak(Id, Msg, State) ->
 %% check_passwd(_PeerId, _Passwd) ->
 %%     fail.
 
-check_passwd(PeerId, Passwd) ->
+check_passwd(PeerId, Passwd, #state{accounting = Accounting}) ->
     Attrs = [
 	     {?User_Name, PeerId},
 	     {?User_Password , Passwd},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1}
-	    ],
+	     | ppp_link:accounting_attrs(Accounting, [])],
     Req = #radius_request{
 	     cmd = request,
 	     attrs = Attrs,

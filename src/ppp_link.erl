@@ -8,6 +8,9 @@
 -export([layer_up/3, layer_down/3, layer_started/3, layer_finished/3]).
 -export([auth_withpeer/3, auth_peer/3]).
 
+%% RADIUS helper
+-export([accounting_attrs/2]).
+
 %% gen_fsm callbacks
 -export([init/1,
 	 establish/2, auth/2, network/2, terminating/2,
