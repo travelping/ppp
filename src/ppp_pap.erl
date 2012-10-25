@@ -85,7 +85,7 @@ protrej(FSM) ->
     gen_server:call(FSM, protrej).
 
 frame_in(FSM, Frame) ->
-    gen_server:call(FSM, Frame).
+    gen_server:call(FSM, Frame, infinity).
 
 %%%===================================================================
 %%% API
