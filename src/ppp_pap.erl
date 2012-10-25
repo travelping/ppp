@@ -491,6 +491,9 @@ append_accounting_opt(Opt, Opts) ->
 %% Class
 process_gen_attrs({#attribute{id = ?Class}, Class}, {Verdict, Opts}) ->
     {Verdict, append_accounting_opt({class, Class}, Opts)};
+%% User-Name
+process_gen_attrs({#attribute{id = ?User_Name}, UserName}, {Verdict, Opts}) ->
+    {Verdict, append_accounting_opt({username, UserName}, Opts)};
 
 %% Service-Type = Framed-User
 process_gen_attrs({#attribute{id = ?Service_Type}, 2}, {_Verdict, _Opts} = Acc0) ->

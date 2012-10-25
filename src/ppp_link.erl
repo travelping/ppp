@@ -385,9 +385,13 @@ do_accounting_start(#state{config = Config,
 			   peerid = PeerId,
 			   his_ipcp_opts = HisOpts}) ->
     Accounting = proplists:get_value(accounting, Config, []),
+    UserName = case proplists:get_value(username, Accounting) of
+		   undefined -> PeerId;
+		   Value -> Value
+	       end,
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Start},
-	     {?User_Name, PeerId},
+	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr}
@@ -406,10 +410,14 @@ do_accounting_interim(Now, #state{config = Config,
 				  his_ipcp_opts = HisOpts}) ->
     io:format("do_accounting_interim~n"),
     Accounting = proplists:get_value(accounting, Config, []),
+    UserName = case proplists:get_value(username, Accounting) of
+		   undefined -> PeerId;
+		   Value -> Value
+	       end,
     Counter = transport_get_counter(Transport, HisOpts#ipcp_opts.hisaddr),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Update},
-	     {?User_Name, PeerId},
+	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
@@ -429,10 +437,14 @@ do_accounting_stop(Now, #state{config = Config,
 			       his_ipcp_opts = HisOpts}) ->
     io:format("do_accounting_stop~n"),
     Accounting = proplists:get_value(accounting, Config, []),
+    UserName = case proplists:get_value(username, Accounting) of
+		   undefined -> PeerId;
+		   Value -> Value
+	       end,
     Counter = transport_get_counter(Transport, HisOpts#ipcp_opts.hisaddr),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Stop},
-	     {?User_Name, PeerId},
+	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
