@@ -376,6 +376,8 @@ accounting_stop(_Reason,
 
 accounting_attrs([], Attrs) ->
     Attrs;
+accounting_attrs([{class, Class}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Class, Class}|Attrs]);
 accounting_attrs([_|Rest], Attrs) ->
     accounting_attrs(Rest, Attrs).
 

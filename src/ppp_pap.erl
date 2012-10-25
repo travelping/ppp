@@ -487,6 +487,10 @@ append_accounting_opt(Opt, Opts) ->
     Accounting = proplists:get_value(accounting, Opts, []),
     lists:keystore(accounting, 1, Opts, {accounting, [Opt|Accounting]}).
 
+%% Class
+process_gen_attrs({#attribute{id = ?Class}, Class}, {Verdict, Opts}) ->
+    {Verdict, append_accounting_opt({class, Class}, Opts)};
+
 %% Service-Type = Framed-User
 process_gen_attrs({#attribute{id = ?Service_Type}, 2}, {_Verdict, _Opts} = Acc0) ->
     Acc0;
