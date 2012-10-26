@@ -17,6 +17,7 @@
 	 establish/2, auth/2, network/2, terminating/2,
 	 handle_event/3, handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 
+-include("ppp.hrl").
 -include("ppp_lcp.hrl").
 -include("ppp_ipcp.hrl").
 -include_lib("eradius/include/eradius_lib.hrl").
@@ -276,8 +277,19 @@ transport_send({TransportModule, TransportRef}, Data) ->
 transport_terminate({TransportModule, TransportRef}) ->
     TransportModule:terminate(TransportRef).
 
-transport_get_counter({TransportModule, TransportRef}, IP) ->
-    TransportModule:get_counter(TransportRef, IP).
+transport_get_acc_counter({TransportModule, TransportRef}, IP) ->
+    case TransportModule:get_counter(TransportRef, IP) of
+	#ppp_stats{packet_count	= {PktRx, PktTx},
+		   byte_count   = {CntRx, CntTx}} ->
+	    [{?Acct_Output_Gigawords, CntTx div 16#100000000},
+	     {?Acct_Input_Gigawords, CntRx div 16#100000000},
+	     {?Acct_Output_Octets, CntTx rem 16#100000000},
+	     {?Acct_Input_Octets, CntRx rem 16#100000000},
+	     {?Acct_Output_Packets, PktTx},
+	     {?Acct_Input_Packets, PktRx}];
+	_ -> []
+    end.
+	
 
 lowerup(#state{pap = PAP, ipcp = IPCP}) ->
     ppp_pap:lowerup(PAP),
@@ -506,7 +518,7 @@ do_accounting_interim(Now, #state{config = Config,
 		   undefined -> PeerId;
 		   Value -> Value
 	       end,
-    Counter = transport_get_counter(Transport, HisOpts#ipcp_opts.hisaddr),
+    Counter = transport_get_acc_counter(Transport, HisOpts#ipcp_opts.hisaddr),
     {ok, NasId} = application:get_env(nas_identifier),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Update},
@@ -516,7 +528,8 @@ do_accounting_interim(Now, #state{config = Config,
 	     {?NAS_Identifier, NasId},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
 	     {?RSession_Time, round((Now - Start) / 10)}
-	     | accounting_attrs(Accounting, [])],
+	     | Counter]
+	++ accounting_attrs(Accounting, []),
     Req = #radius_request{
 	     cmd = accreq,
 	     attrs = Attrs,
@@ -535,7 +548,7 @@ do_accounting_stop(Now, #state{config = Config,
 		   undefined -> PeerId;
 		   Value -> Value
 	       end,
-    Counter = transport_get_counter(Transport, HisOpts#ipcp_opts.hisaddr),
+    Counter = transport_get_acc_counter(Transport, HisOpts#ipcp_opts.hisaddr),
     {ok, NasId} = application:get_env(nas_identifier),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Stop},
@@ -545,7 +558,8 @@ do_accounting_stop(Now, #state{config = Config,
 	     {?NAS_Identifier, NasId},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
 	     {?RSession_Time, round((Now - Start) / 10)}
-	     | accounting_attrs(Accounting, [])],
+	     | Counter]
+	++ accounting_attrs(Accounting, []),
     Req = #radius_request{
 	     cmd = accreq,
 	     attrs = Attrs,
