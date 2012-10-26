@@ -381,6 +381,9 @@ accounting_stop(_Reason,
 
 accounting_attrs([], Attrs) ->
     Attrs;
+accounting_attrs([{session_id, Value}|Rest], Attrs) ->
+    Id = io_lib:format("~40.16.0B", [Value]),
+    accounting_attrs(Rest, [{?Acct_Session_Id, Id}|Attrs]);
 accounting_attrs([{class, Class}|Rest], Attrs) ->
     accounting_attrs(Rest, [{?Class, Class}|Attrs]);
 accounting_attrs([{calling_station, Value}|Rest], Attrs) ->
