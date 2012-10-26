@@ -503,6 +503,10 @@ process_gen_attrs({#attribute{id = ?User_Name}, UserName}, {Verdict, Opts}) ->
 process_gen_attrs({#attribute{id = ?Acct_Interim_Interval}, InterimAccounting}, {Verdict, Opts}) ->
     {Verdict, [{interim_accounting, InterimAccounting}|Opts]};
 
+%% Session-Timeout
+process_gen_attrs({#attribute{id = ?Session_Timeout}, TimeOut}, {Verdict, Opts}) ->
+    {Verdict, [{session_timeout, TimeOut}|Opts]};
+
 %% Service-Type = Framed-User
 process_gen_attrs({#attribute{id = ?Service_Type}, 2}, {_Verdict, _Opts} = Acc0) ->
     Acc0;

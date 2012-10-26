@@ -44,8 +44,9 @@
 	  accounting_start	:: integer(),			%% Session Start Time in Ticks
 	  our_ipcp_opts		:: #lcp_opts{}, 		%% Options that peer ack'd
 	  his_ipcp_opts		:: #lcp_opts{},			%% Options that we ack'd
+	  timeout_ref		:: reference(),			%% Session-Timeout Timer
 	  interim_ref		:: reference()			%% Interim-Accouting Timer
-
+				   
 	 }).
 
 %%%===================================================================
@@ -165,6 +166,10 @@ network(interim_accounting, State) ->
     NewState = accounting_interim(State),
     {next_state, network, NewState};
 
+network(session_timeout, State) ->
+    NewState = stop_session_timeout(State),
+    lcp_close(<<"Session Timeout">>, NewState);
+
 network({packet_in, Frame}, State = #state{lcp = LCP})
   when element(1, Frame) == lcp ->
     io:format("LCP Frame in phase network: ~p~n", [Frame]),
@@ -183,8 +188,7 @@ network({packet_in, Frame}, State = #state{ipcp = IPCP})
     io:format("IPCP Frame in phase network: ~p~n", [Frame]),
     case ppp_ipcp:frame_in(IPCP, Frame) of
 	down ->
-	    State1 = accounting_stop(down, State),
-	    np_finished(State1);
+	    np_finished(State);
 	ok ->
 	    {next_state, network, State};
  	{up, OurOpts, HisOpts} ->
@@ -204,6 +208,8 @@ network({layer_down, lcp, Reason}, State) ->
     lcp_down(State1).
 
 terminating(interim_accounting, State) ->
+    {next_state, terminating, State};
+terminating(session_timeout, State) ->
     {next_state, terminating, State};
 
 terminating({packet_in, Frame}, State = #state{lcp = LCP})
@@ -227,9 +233,10 @@ terminating({packet_in, Frame}, State) ->
     {next_state, establish, State};
 
 terminating({layer_down, lcp, Reason}, State) ->
-    lowerdown(State),
-    lowerclose(Reason, State),
-    lcp_down(State);
+    State1 = accounting_stop(down, State),
+    lowerdown(State1),
+    lowerclose(Reason, State1),
+    lcp_down(State1);
 
 terminating({layer_finished, lcp, terminated}, State = #state{transport = Transport}) ->
     io:format("LCP in phase terminating got: terminated~n"),
@@ -340,12 +347,26 @@ lcp_close(Msg, State = #state{lcp = LCP}) ->
 np_finished(State) ->
     lcp_close(<<"No network protocols running">>, State).
 
-np_open(State0 = #state{config = Config}) ->
-    State1 = accounting_start(init, State0),
+np_open(State = #state{config = Config}) ->
+    NewState1 = start_session_timeout(State),
+    NewState2 = accounting_start(init, NewState1),
     {ok, IPCP} = ppp_ipcp:start_link(self(), Config),
     ppp_ipcp:lowerup(IPCP),
     ppp_ipcp:loweropen(IPCP),
-    {next_state, network, State1#state{ipcp = IPCP}}.
+    {next_state, network, NewState2#state{ipcp = IPCP}}.
+
+start_session_timeout(State = #state{config = Config}) ->
+    case proplists:get_value(session_timeout, Config) of
+	TimeOut when is_integer(TimeOut) ->
+	    Ref = gen_fsm:send_event_after(TimeOut * 1000, session_timeout),
+	    State#state{timeout_ref = Ref};
+	_ ->
+	    State
+    end.
+
+stop_session_timeout(State = #state{timeout_ref = Ref}) ->
+    gen_fsm:cancel_timer(Ref),
+    State#state{timeout_ref = undefined}.
 
 get_interim_accounting(Config) ->
     case proplists:get_value(interim_accounting, Config) of
