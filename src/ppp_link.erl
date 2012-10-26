@@ -24,7 +24,6 @@
 -include_lib("eradius/include/dictionary_rfc4679.hrl").
 
 -define(SERVER, ?MODULE).
--define(DEFAULT_INTERIM, 10).
 
 -record(state, {
 	  config		:: list(),         		%% config options proplist
@@ -348,6 +347,15 @@ np_open(State0 = #state{config = Config}) ->
     ppp_ipcp:loweropen(IPCP),
     {next_state, network, State1#state{ipcp = IPCP}}.
 
+get_interim_accounting(Config) ->
+    case proplists:get_value(interim_accounting, Config) of
+	undefined ->
+	    {ok, Value} = application:get_env(interim_accounting),
+	    Value;
+	Value ->
+	    Value
+    end.
+	    
 accounting_start(init, State) ->
     State.
 
@@ -356,14 +364,18 @@ accounting_start(ipcp_up, OurOpts, HisOpts,
     NewState0 = State#state{accounting_start = now_ticks(), our_ipcp_opts = OurOpts, his_ipcp_opts = HisOpts},
     io:format("--------------------------~nAccounting: OPEN~n--------------------------~n"),
     spawn(fun() -> do_accounting_start(NewState0) end),
-    InterimAccounting = proplists:get_value(interim_accounting, Config, ?DEFAULT_INTERIM),
-    Ref = gen_fsm:send_event_after(InterimAccounting * 1000, interim_accounting),
-    NewState0#state{interim_ref = Ref}.
+    case get_interim_accounting(Config) of
+	InterimAccounting when InterimAccounting > 0 ->
+	    Ref = gen_fsm:send_event_after(InterimAccounting * 1000, interim_accounting),
+	    NewState0#state{interim_ref = Ref};
+	_ ->
+	    NewState0
+    end.
 
 accounting_interim(State = #state{accounting_start = Start,
 				  config = Config}) ->
     Now = now_ticks(),
-    InterimAccounting = proplists:get_value(interim_accounting, Config, ?DEFAULT_INTERIM) * 10,
+    InterimAccounting = get_interim_accounting(Config) * 10,
     %% avoid time drifts...
     Next = InterimAccounting - (Now - Start) rem InterimAccounting,
     Ref = gen_fsm:send_event_after(InterimAccounting * 100, interim_accounting),
