@@ -382,6 +382,15 @@ accounting_attrs([], Attrs) ->
     Attrs;
 accounting_attrs([{class, Class}|Rest], Attrs) ->
     accounting_attrs(Rest, [{?Class, Class}|Attrs]);
+accounting_attrs([{port_id, Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?NAS_Port_Id, Value}|Attrs]);
+
+accounting_attrs([{port_type, pppoe_eth}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?NAS_Port_Type, 32}|Attrs]);
+accounting_attrs([{port_type, pppoe_vlan}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?NAS_Port_Type, 33}|Attrs]);
+accounting_attrs([{port_type, pppoe_qinq}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?NAS_Port_Type, 34}|Attrs]);
 
 %% DSL-Forum PPPoE Intermediate Agent Attributes
 accounting_attrs([{'ADSL-Agent-Circuit-Id', Value}|Rest], Attrs) ->
@@ -436,7 +445,6 @@ do_accounting_start(#state{config = Config,
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
 	     {?NAS_Identifier, NasId},
-	     {?NAS_Port_Type, 34},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr}
 	     | accounting_attrs(Accounting, [])],
     Req = #radius_request{
@@ -465,7 +473,6 @@ do_accounting_interim(Now, #state{config = Config,
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
 	     {?NAS_Identifier, NasId},
-	     {?NAS_Port_Type, 34},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
 	     {?RSession_Time, round((Now - Start) / 10)}
 	     | accounting_attrs(Accounting, [])],
@@ -495,7 +502,6 @@ do_accounting_stop(Now, #state{config = Config,
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
 	     {?NAS_Identifier, NasId},
-	     {?NAS_Port_Type, 34},
 	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
 	     {?RSession_Time, round((Now - Start) / 10)}
 	     | accounting_attrs(Accounting, [])],
