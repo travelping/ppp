@@ -7,6 +7,7 @@
 -export([packet_in/2, send/2]).
 -export([layer_up/3, layer_down/3, layer_started/3, layer_finished/3]).
 -export([auth_withpeer/3, auth_peer/3]).
+-export([accounting_on/0]).
 
 %% RADIUS helper
 -export([accounting_attrs/2]).
@@ -516,6 +517,17 @@ do_accounting_stop(Now, #state{config = Config,
     {ok, NAS} = application:get_env(radius_acct_server),
     eradius_client:send_request(NAS, Req).
 
+accounting_on() ->
+    {ok, NasId} = application:get_env(nas_identifier),
+    Attrs = [
+	     {?RStatus_Type, ?RStatus_Type_On},
+	     {?NAS_Identifier, NasId}],
+    Req = #radius_request{
+	     cmd = accreq,
+	     attrs = Attrs,
+	     msg_hmac = true},
+    {ok, NAS} = application:get_env(radius_acct_server),
+    eradius_client:send_request(NAS, Req).
 
 %% get time with 100ms +/50ms presision
 now_ticks() ->
