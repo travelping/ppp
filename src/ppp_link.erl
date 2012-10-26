@@ -382,6 +382,10 @@ accounting_attrs([], Attrs) ->
     Attrs;
 accounting_attrs([{class, Class}|Rest], Attrs) ->
     accounting_attrs(Rest, [{?Class, Class}|Attrs]);
+accounting_attrs([{calling_station, Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Calling_Station_Id, Value}|Attrs]);
+accounting_attrs([{called_station, Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Called_Station_Id, Value}|Attrs]);
 accounting_attrs([{port_id, Value}|Rest], Attrs) ->
     accounting_attrs(Rest, [{?NAS_Port_Id, Value}|Attrs]);
 
