@@ -108,7 +108,7 @@ establish({packet_in, Frame}, State = #state{lcp = LCP})
 		    NewState2 = do_auth_withpeer(HisOpts#lcp_opts.neg_auth, NewState1),
 		    {next_state, auth, NewState2};
 		true ->
-		    np_open(NewState0)
+		    phase_open(network, NewState0)
 	    end;
 	Reply ->
 	    io:format("LCP got: ~p~n", [Reply]),
@@ -189,7 +189,7 @@ network({packet_in, Frame}, State = #state{ipcp = IPCP})
     io:format("IPCP Frame in phase network: ~p~n", [Frame]),
     case ppp_ipcp:frame_in(IPCP, Frame) of
 	down ->
-	    np_finished(State);
+	    phase_finished(network, State);
 	ok ->
 	    {next_state, network, State};
  	{up, OurOpts, HisOpts} ->
@@ -322,7 +322,7 @@ auth_success(Direction, State = #state{auth_pending = Pending}) ->
     NewState = State#state{auth_pending = proplists:delete(Direction, Pending)},
     if
 	NewState#state.auth_pending == [] ->
-	    np_open(NewState);
+	    phase_open(network, NewState);
 	true ->
 	    {next_state, auth, NewState}
     end.
@@ -356,10 +356,12 @@ lcp_close(Msg, State = #state{lcp = LCP}) ->
     io:format("LCP close got: ~p~n", [Reply]),
     {next_state, terminating, State}.
 
-np_finished(State) ->
+%% Network Phase Finished
+phase_finished(network, State) ->
     lcp_close(<<"No network protocols running">>, State).
 
-np_open(State = #state{config = Config}) ->
+%% Network Phase Open
+phase_open(network, State = #state{config = Config}) ->
     NewState1 = start_session_timeout(State),
     NewState2 = accounting_start(init, NewState1),
     {ok, IPCP} = ppp_ipcp:start_link(self(), Config),
