@@ -420,9 +420,11 @@ accounting_interim(State = #state{accounting_start = Start,
 accounting_stop(_Reason,
 		State = #state{interim_ref = Ref}) ->
     Now = now_ticks(),
-    gen_fsm:cancel_timer(Ref),
+    if is_reference(Ref) -> gen_fsm:cancel_timer(Ref);
+       true -> ok
+    end,
     spawn(fun() -> do_accounting_stop(Now, State) end),
-    State.
+    State#state{interim_ref = undefined}.
 
 accounting_attrs([], Attrs) ->
     Attrs;
