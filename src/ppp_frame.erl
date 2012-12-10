@@ -11,6 +11,7 @@
 -define(PPP_IPX,         16#2b).	%% IPX protocol
 -define(PPP_VJC_COMP,    16#2d).	%% VJ compressed TCP
 -define(PPP_VJC_UNCOMP,  16#2f).	%% VJ uncompressed TCP
+-define(PPP_IPV6CP_COMP, 16#004f).
 -define(PPP_IPV6,        16#57).	%% Internet Protocol Version 6
 -define(PPP_COMP,        16#fd).	%% compressed packet
 -define(PPP_IPCP,        16#8021).	%% IP Control Protocol
@@ -135,6 +136,9 @@ chap_md_type(129)		-> 'MS-CHAP-v2'.
 -define(CI_MS_DNS2,		131).		%% Secondary DNS value			[RFC1877]
 -define(CI_MS_WINS2,		132).		%% Secondary WINS value			[RFC1877]
 
+-define(CI_IFACEID,		1).		%% Interface-Identifier			[RFC5072]
+-define(CI_IPV6_COMPRESSTYPE,	2).		%% IPv6-Compression-Protocol		[RFC5172]
+
 -define('PAP-Authentication-Request', 1).
 -define('PAP-Authenticate-Ack',       2).
 -define('PAP-Authenticate-Nak',       3).
@@ -168,11 +172,20 @@ decode(<<?PPP_IP:8/integer, Info/binary>>) ->
     {ipv4, Info};
 decode(<<?PPP_IP:16/integer, Info/binary>>) ->
     {ipv4, Info};
+decode(<<?PPP_IPV6:8/integer, Info/binary>>) ->
+    {ipv6, Info};
+decode(<<?PPP_IPV6:16/integer, Info/binary>>) ->
+    {ipv6, Info};
 
 decode(<<?PPP_IPCP:16/integer, Code:8/integer, Id:8/integer, Length:16/integer, Rest/binary>>) ->
     DataLen = Length - 4,
     <<Data:DataLen/bytes, _Pad/binary>> = Rest,
     decode_ipcp(Data, Id, Code);
+
+decode(<<?PPP_IPV6CP:16/integer, Code:8/integer, Id:8/integer, Length:16/integer, Rest/binary>>) ->
+    DataLen = Length - 4,
+    <<Data:DataLen/bytes, _Pad/binary>> = Rest,
+    decode_ipv6cp(Data, Id, Code);
 
 decode(<<?PPP_LCP:16/integer, Code:8/integer, Id:8/integer, Length:16/integer, Rest/binary>>) ->
     DataLen = Length - 4,
@@ -268,6 +281,25 @@ encode({ipcp, 'CP-Code-Reject', Id, RejectedPacket}) ->
 encode({ipcp, 'CP-Protocol-Reject', Id, RejectedProtocol, RejectedInfo}) ->
     encode(<<?PPP_IPCP:16>>, ?'CP-Protocol-Reject', Id, <<(protocol(RejectedProtocol)):16, RejectedInfo/binary>>);
 
+encode({ipv6cp, Code, Id, Options})
+  when Code == 'CP-Configure-Request';
+       Code == 'CP-Configure-Ack';
+       Code == 'CP-Configure-Nak';
+       Code == 'CP-Configure-Reject' ->
+    Data = encode_ipv6cp_options(Options),
+    encode(<<?PPP_IPV6CP:16>>, cp_code(Code), Id, Data);
+encode({ipv6cp, Code, Id, Data})
+  when Code == 'CP-Terminate-Request';
+       Code == 'CP-Terminate-Ack' ->
+    encode(<<?PPP_IPV6CP:16>>, cp_code(Code), Id, Data);
+encode({ipv6cp, 'CP-Code-Reject', Id, RejectedPacket}) when is_binary(RejectedPacket)->
+    encode(<<?PPP_IPV6CP:16>>, ?'CP-Code-Reject', Id, RejectedPacket);
+encode({ipv6cp, 'CP-Code-Reject', Id, RejectedPacket}) ->
+    BinRejectedPacket = encode(RejectedPacket),
+    encode(<<?PPP_IPV6CP:16>>, ?'CP-Code-Reject', Id, BinRejectedPacket);
+encode({ipv6cp, 'CP-Protocol-Reject', Id, RejectedProtocol, RejectedInfo}) ->
+    encode(<<?PPP_IPV6CP:16>>, ?'CP-Protocol-Reject', Id, <<(protocol(RejectedProtocol)):16, RejectedInfo/binary>>);
+
 encode({Protocol, Code, Id, Data})
   when Protocol >= 16#8000 ->
     encode(<<Protocol:16>>, cp_code(Code), Id, Data).
@@ -335,6 +367,21 @@ decode_ipcp(RejectedPacket, Id, ?'CP-Code-Reject') ->
     {ipcp, 'CP-Code-Reject', Id, RejectedPacket};
 decode_ipcp(<<RejectedProtocol:16/integer, RejectedInfo/binary>>, Id, ?'CP-Protocol-Reject') ->
     {ipcp, 'CP-Protocol-Reject', Id, protocol(RejectedProtocol), RejectedInfo}.
+
+decode_ipv6cp(Data, Id, Code)
+  when Code == ?'CP-Configure-Request';
+       Code == ?'CP-Configure-Ack';
+       Code == ?'CP-Configure-Nak';
+       Code == ?'CP-Configure-Reject' ->
+    {ipv6cp, cp_code(Code), Id, decode_ipv6cp_options(Data)};
+decode_ipv6cp(Data, Id, Code)
+  when Code == ?'CP-Terminate-Request';
+       Code == ?'CP-Terminate-Ack' ->
+    {ipv6cp, cp_code(Code), Id, Data};
+decode_ipv6cp(RejectedPacket, Id, ?'CP-Code-Reject') ->
+    {ipv6cp, 'CP-Code-Reject', Id, RejectedPacket};
+decode_ipv6cp(<<RejectedProtocol:16/integer, RejectedInfo/binary>>, Id, ?'CP-Protocol-Reject') ->
+    {ipv6cp, 'CP-Protocol-Reject', Id, protocol(RejectedProtocol), RejectedInfo}.
 
 decode_lcp_option(<<MRU:16/integer>>, ?CI_MRU) ->
     {mru, MRU};
@@ -421,6 +468,31 @@ decode_ipcp_options(Data = <<Type:8/integer, Length:8/integer, Rest/binary>>, Ac
 	    {raw, Data}
     end.
 
+decode_ipv6cp_option(IFaceId, ?CI_IFACEID) ->
+    {ifaceid, IFaceId};
+decode_ipv6cp_option(<<?PPP_IPV6CP_COMP:16/integer>>, ?CI_IPV6_COMPRESSTYPE) ->
+    {compresstype, ipv6_hc};
+decode_ipv6cp_option(Data, Type) ->
+    {Type, Data}.
+
+decode_ipv6cp_options(Options) ->
+    decode_ipv6cp_options(Options, []).
+
+decode_ipv6cp_options(<<>>, Acc) ->
+    lists:reverse(Acc);
+
+%% variable length options decoding
+decode_ipv6cp_options(Data = <<Type:8/integer, Length:8/integer, Rest/binary>>, Acc) ->
+    PayLoadLen = Length - 2,
+    case Rest of
+	<<PayLoad:PayLoadLen/binary, Next/binary>> ->
+	    Opt = decode_ipv6cp_option(PayLoad, Type),
+	    decode_ipv6cp_options(Next, [Opt|Acc]);
+	_ ->
+	    %% invalid Length value
+	    {raw, Data}
+    end.
+
 %% ----------------------------------------
 %% encoder helper
 %% ----------------------------------------
@@ -501,4 +573,23 @@ encode_ipcp_option({Type, Data}) ->
 
 encode_ipcp_options(Options) ->
     << <<(encode_ipcp_option(O))/binary>> || O <- Options >>.
+
+%% encode options
+encode_ipv6cp_option(Type, Data) ->
+    Length = size(Data) + 2,
+    <<Type:8, Length:8, Data/binary>>.
+
+%% allow empty list elements to simplify contructing the option list
+encode_ipv6cp_option([]) ->
+    <<>>;
+encode_ipv6cp_option({ifaceid, IFaceId}) ->
+    encode_ipv6cp_option(?CI_IFACEID, IFaceId);
+encode_ipv6cp_option({compresstype, ipv6_hc}) ->
+    encode_ipv6cp_option(?CI_IPV6_COMPRESSTYPE, <<?PPP_IPV6CP_COMP:16>>);
+
+encode_ipv6cp_option({Type, Data}) when is_integer(Type), is_binary(Data) ->
+    encode_ipv6cp_option(Type, Data).
+
+encode_ipv6cp_options(Options) ->
+    << <<(encode_ipv6cp_option(O))/binary>> || O <- Options >>.
 
