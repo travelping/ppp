@@ -550,18 +550,23 @@ do_accounting_stop(Now, #state{config = Config,
 		   undefined -> PeerId;
 		   Value -> Value
 	       end,
-    Counter = transport_get_acc_counter(Transport, HisOpts#ipcp_opts.hisaddr),
     {ok, NasId} = application:get_env(nas_identifier),
-    Attrs = [
+    RadAttrs = [
 	     {?RStatus_Type, ?RStatus_Type_Stop},
 	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
-	     {?NAS_Identifier, NasId},
-	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
-	     {?RSession_Time, round((Now - Start) / 10)}
-	     | Counter]
-	++ accounting_attrs(Accounting, []),
+	     {?NAS_Identifier, NasId}],
+    IPAttrs = if
+		  is_record(HisOpts, ipcp_opts) ->
+		      Counter = transport_get_acc_counter(Transport, HisOpts#ipcp_opts.hisaddr),
+		      [{?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
+		       {?RSession_Time, round((Now - Start) / 10)}
+		       | Counter];
+		  true ->
+		      [{?RSession_Time, 0}]
+	      end,
+    Attrs = RadAttrs ++ IPAttrs ++ accounting_attrs(Accounting, []),
     Req = #radius_request{
 	     cmd = accreq,
 	     attrs = Attrs,
