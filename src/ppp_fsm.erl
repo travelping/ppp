@@ -20,6 +20,7 @@
 	 ack_rcvd/2, ack_rcvd/3,
 	 ack_sent/2, ack_sent/3,
 	 opened/2, opened/3,
+	 send_event/2,
 	 handle_event/3, handle_sync_event/4, handle_info/3,
 	 terminate/3, code_change/4]).
 
@@ -148,6 +149,9 @@ fsm_lowerclose(FSM, Reason) ->
 
 fsm_frame_in(FSM, Frame) when is_tuple(Frame) ->
     gen_fsm:sync_send_all_state_event(FSM, Frame).
+
+send_event(FSM, Event) ->
+    gen_fsm:send_event(FSM, Event).
 
 %%--------------------------------------------------------------------
 start_link(Link, Config, ProtoMod) ->

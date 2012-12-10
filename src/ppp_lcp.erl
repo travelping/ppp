@@ -5,7 +5,7 @@
 
 %% API
 -export([start_link/2]).
--export([frame_in/2, lowerup/1, lowerdown/1, loweropen/1, lowerclose/2]).
+-export([frame_in/2, lowerup/1, lowerdown/1, loweropen/1, lowerclose/2, protocol_reject/2]).
 
 %% ppp_fsm callbacks
 -export([init/2, up/1, down/1, starting/1, finished/1]).
@@ -68,6 +68,9 @@ lowerclose(FSM, Reason) ->
 frame_in(FSM, Frame) ->
     ppp_fsm:fsm_frame_in(FSM, Frame).
 
+protocol_reject(FSM, Request) ->
+    ppp_fsm:send_event(FSM, {protocol_reject, Request}).
+    
 %%===================================================================
 %% ppp_fsm callbacks
 %%===================================================================
@@ -361,7 +364,14 @@ opened({timeout, _Ref, request_echo}, ReqId,
 	0 ->
 	    io:format("~p: Echo-Request Timeout, closing~n", [?MODULE]),
 	    {close, <<"Peer not responding">>, State}
-    end.
+    end;
+
+opened({protocol_reject, Request}, ReqId, State) ->
+    Protocol = element(1, Request),
+    <<_:16, BinRequest/binary>> = ppp_frame:encode(Request),
+    NewReqId = ReqId + 1,
+    SendReq = {?PROTOCOL, 'CP-Protocol-Reject', NewReqId, Protocol, BinRequest},
+    {send, SendReq, NewReqId, opened, State}.
 
 opened({_, 'CP-Echo-Reply', _Id, Magic}, State =
 	   #state{his_opts = HisOpts,

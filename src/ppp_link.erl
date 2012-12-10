@@ -185,7 +185,7 @@ network({packet_in, Frame}, State = #state{lcp = LCP})
 
 %% TODO: we might be able to start protocols on demand....
 network({packet_in, Frame}, State = #state{ipcp = IPCP})
-  when element(1, Frame) == ipcp ->
+  when element(1, Frame) == ipcp, is_pid(IPCP) ->
     io:format("IPCP Frame in phase network: ~p~n", [Frame]),
     case ppp_ipcp:frame_in(IPCP, Frame) of
 	down ->
@@ -201,6 +201,10 @@ network({packet_in, Frame}, State = #state{ipcp = IPCP})
 	    io:format("IPCP in phase network got: ~p~n", [Reply]),
 	    {next_state, network, State}
     end;
+
+network({packet_in, Frame}, State) ->
+    protocol_reject(Frame, State),
+    {next_state, network, State};
 
 network({layer_down, lcp, Reason}, State) ->
     State1 = accounting_stop(down, State),
@@ -270,6 +274,9 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+protocol_reject(Request, #state{lcp = LCP}) ->
+    ppp_lcp:protocol_reject(LCP, Request).
 
 transport_send({TransportModule, TransportRef}, Data) ->
     TransportModule:send(TransportRef, Data).
