@@ -386,7 +386,7 @@ start_session_timeout(State = #state{config = Config}) ->
     end.
 
 stop_session_timeout(State = #state{timeout_ref = Ref}) ->
-    gen_fsm:cancel_timer(Ref),
+    cancel_timer(Ref),
     State#state{timeout_ref = undefined}.
 
 get_interim_accounting(Config) ->
@@ -429,9 +429,7 @@ accounting_interim(State = #state{accounting_start = Start,
 accounting_stop(_Reason,
 		State = #state{interim_ref = Ref}) ->
     Now = now_ticks(),
-    if is_reference(Ref) -> gen_fsm:cancel_timer(Ref);
-       true -> ok
-    end,
+    cancel_timer(Ref),
     spawn(fun() -> do_accounting_stop(Now, State) end),
     State#state{interim_ref = undefined}.
 
@@ -599,3 +597,8 @@ accounting_on() ->
 now_ticks() ->
     {MegaSecs, Secs, MicroSecs} = erlang:now(),
     MegaSecs * 10000000 + Secs * 10 + round(MicroSecs div 100000).
+
+cancel_timer(undefined) ->
+    ok;
+cancel_timer(Ref) ->
+    gen_fsm:cancel_timer(Ref).
