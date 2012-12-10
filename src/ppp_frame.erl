@@ -79,7 +79,23 @@ cp_code('CP-Discard-Request')		-> ?'CP-Discard-Request';
 cp_code('CP-Identification')		-> ?'CP-Identification';
 cp_code('CP-Time-Remaining')		-> ?'CP-Time-Remaining';
 cp_code('CP-Reset-Request')		-> ?'CP-Reset-Request';
-cp_code('CP-Reset-Reply')		-> ?'CP-Reset-Reply'.
+cp_code('CP-Reset-Reply')		-> ?'CP-Reset-Reply';
+
+cp_code(X) when is_integer(X)		-> X.
+
+protocol(ipcp)		-> ?PPP_IPCP;
+protocol(ipv6cp)	-> ?PPP_IPV6CP;
+protocol(lcp)		-> ?PPP_LCP;
+protocol(pap)		-> ?PPP_PAP;
+protocol(chap)		-> ?PPP_CHAP;
+
+protocol(?PPP_IPCP)	-> ipcp;
+protocol(?PPP_IPV6CP)	-> ipv6cp;
+protocol(?PPP_LCP)	-> lcp;
+protocol(?PPP_PAP)	-> pap;
+protocol(?PPP_CHAP)	-> chap;
+
+protocol(X) when is_integer(X) -> X.
 
 cp_auth_protocol(?PPP_PAP)	-> pap;
 cp_auth_protocol(?PPP_CHAP)	-> chap;
@@ -144,7 +160,13 @@ chap_code('CHAP-Response')   -> ?'CHAP-Response';
 chap_code('CHAP-Success')    -> ?'CHAP-Success';
 chap_code('CHAP-Failure')    -> ?'CHAP-Failure'.
 
+%% ----------------------------------------
+% decoder API
+%% ----------------------------------------
+
 decode(<<?PPP_IP:8/integer, Info/binary>>) ->
+    {ipv4, Info};
+decode(<<?PPP_IP:16/integer, Info/binary>>) ->
     {ipv4, Info};
 
 decode(<<?PPP_IPCP:16/integer, Code:8/integer, Id:8/integer, Length:16/integer, Rest/binary>>) ->
@@ -165,11 +187,15 @@ decode(<<?PPP_PAP:16/integer, Code:8/integer, Id:8/integer, Length:16/integer, R
 decode(<<?PPP_CHAP:16/integer, Code:8/integer, Id:8/integer, Length:16/integer, Rest/binary>>) ->
     DataLen = Length - 4,
     <<Data:DataLen/bytes, _Pad/binary>> = Rest,
-    decode_chap(Data, Id, Code).
+    decode_chap(Data, Id, Code);
 
-encode(Type, Code, Id, Data) ->
-    Length = 4 + size(Data),
-    <<Type/binary, Code:8, Id:8, Length:16, Data/binary>>.
+decode(<<Protocol:16/integer, Code:8/integer, Id:8/integer, Length:16/integer, Data/binary>>)
+  when Protocol >= 16#8000 ->
+    {Protocol, cp_code(Code), Id, Data}.
+
+%% ----------------------------------------
+% encoder API
+%% ----------------------------------------
 
 encode({lcp, Code, Id, Options})
   when Code == 'CP-Configure-Request';
@@ -194,7 +220,7 @@ encode({lcp, 'CP-Echo-Request', Id, Magic}) ->
 encode({lcp, 'CP-Echo-Reply', Id, Magic}) ->
     encode(<<?PPP_LCP:16>>, ?'CP-Echo-Reply', Id, <<Magic:32>>);
 encode({lcp, 'CP-Protocol-Reject', Id, RejectedProtocol, RejectedInfo}) ->
-    encode(<<?PPP_LCP:16>>, ?'CP-Protocol-Reject', Id, <<RejectedProtocol:16, RejectedInfo/binary>>);
+    encode(<<?PPP_LCP:16>>, ?'CP-Protocol-Reject', Id, <<(protocol(RejectedProtocol)):16, RejectedInfo/binary>>);
 encode({lcp, 'CP-Identification', Id, Magic, Message}) ->
     encode(<<?PPP_LCP:16>>, ?'CP-Identification', Id, <<Magic:32, Message/binary>>);
 encode({lcp, 'CP-Time-Remaining', Id, Magic, Remaining, Message}) ->
@@ -240,7 +266,15 @@ encode({ipcp, 'CP-Code-Reject', Id, RejectedPacket}) ->
     BinRejectedPacket = encode(RejectedPacket),
     encode(<<?PPP_IPCP:16>>, ?'CP-Code-Reject', Id, BinRejectedPacket);
 encode({ipcp, 'CP-Protocol-Reject', Id, RejectedProtocol, RejectedInfo}) ->
-    encode(<<?PPP_IPCP:16>>, ?'CP-Protocol-Reject', Id, <<RejectedProtocol:16, RejectedInfo/binary>>).
+    encode(<<?PPP_IPCP:16>>, ?'CP-Protocol-Reject', Id, <<(protocol(RejectedProtocol)):16, RejectedInfo/binary>>);
+
+encode({Protocol, Code, Id, Data})
+  when Protocol >= 16#8000 ->
+    encode(<<Protocol:16>>, cp_code(Code), Id, Data).
+
+%% ----------------------------------------
+%% decoder helper
+%% ----------------------------------------
 
 decode_lcp(Data, Id, Code)
   when Code == ?'CP-Configure-Request';
@@ -261,7 +295,7 @@ decode_lcp(<<Magic:32/integer, _Data/binary>>, Id, ?'CP-Echo-Request') ->
 decode_lcp(<<Magic:32/integer, _Data/binary>>, Id, ?'CP-Echo-Reply') ->
     {lcp, 'CP-Echo-Reply', Id, Magic};
 decode_lcp(<<RejectedProtocol:16/integer, RejectedInfo/binary>>, Id, ?'CP-Protocol-Reject') ->
-    {lcp, 'CP-Protocol-Reject', Id, RejectedProtocol, RejectedInfo};
+    {lcp, 'CP-Protocol-Reject', Id, protocol(RejectedProtocol), RejectedInfo};
 decode_lcp(<<Magic:32/integer, Message/binary>>, Id, ?'CP-Identification') ->
     {lcp, 'CP-Identification', Id, Magic, Message};
 decode_lcp(<<Magic:32/integer, Remaining:32/integer, Message/binary>>, Id, ?'CP-Time-Remaining') ->
@@ -300,7 +334,7 @@ decode_ipcp(Data, Id, Code)
 decode_ipcp(RejectedPacket, Id, ?'CP-Code-Reject') ->
     {ipcp, 'CP-Code-Reject', Id, RejectedPacket};
 decode_ipcp(<<RejectedProtocol:16/integer, RejectedInfo/binary>>, Id, ?'CP-Protocol-Reject') ->
-    {ipcp, 'CP-Protocol-Reject', Id, RejectedProtocol, RejectedInfo}.
+    {ipcp, 'CP-Protocol-Reject', Id, protocol(RejectedProtocol), RejectedInfo}.
 
 decode_lcp_option(<<MRU:16/integer>>, ?CI_MRU) ->
     {mru, MRU};
@@ -386,6 +420,14 @@ decode_ipcp_options(Data = <<Type:8/integer, Length:8/integer, Rest/binary>>, Ac
 	    %% invalid Length value
 	    {raw, Data}
     end.
+
+%% ----------------------------------------
+%% encoder helper
+%% ----------------------------------------
+
+encode(Type, Code, Id, Data) ->
+    Length = 4 + size(Data),
+    <<Type/binary, Code:8, Id:8, Length:16, Data/binary>>.
 
 %% encode options
 encode_lcp_option(Type, Data) ->
