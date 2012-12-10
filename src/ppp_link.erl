@@ -20,11 +20,13 @@
 -include("ppp.hrl").
 -include("ppp_lcp.hrl").
 -include("ppp_ipcp.hrl").
+-include("ppp_ipv6cp.hrl").
 -include_lib("eradius/include/eradius_lib.hrl").
 -include_lib("eradius/include/dictionary.hrl").
 -include_lib("eradius/include/dictionary_rfc4679.hrl").
 
 -define(SERVER, ?MODULE).
+-define(NETWORK_PROTOCOL_TIMEOUT, 5000).
 
 -record(state, {
 	  config		:: list(),         		%% config options proplist
@@ -32,22 +34,23 @@
 	  lcp			:: pid(), 			%% LCP protocol driver
 	  pap			:: pid(), 			%% PAP protocol driver
 	  ipcp			:: pid(), 			%% IPCP protocol driver
+	  ipv6cp		:: pid(), 			%% IPv6CP protocol driver
 
 	  auth_required = true	:: boolean,
 	  auth_pending = []	:: [atom()],
 
+	  nps_open = []		:: ordsets:ordset(),		%% List of Network Protocols that are open
+	  nps_required = []	:: ordsets:ordset(),		%% List of required Network Protocols to establish
+
 	  peerid = <<>>		:: binary(),
+	  peer_addrs = []	:: orddict:orddict(),		%% List of Network Protocol Addresses
 
 	  our_lcp_opts		:: #lcp_opts{}, 		%% Options that peer ack'd
 	  his_lcp_opts		:: #lcp_opts{},			%% Options that we ack'd
-
 								%% Accounting data
 	  accounting_start	:: integer(),			%% Session Start Time in Ticks
-	  our_ipcp_opts		:: #lcp_opts{}, 		%% Options that peer ack'd
-	  his_ipcp_opts		:: #lcp_opts{},			%% Options that we ack'd
 	  timeout_ref		:: reference(),			%% Session-Timeout Timer
 	  interim_ref		:: reference()			%% Interim-Accouting Timer
-				   
 	 }).
 
 %%%===================================================================
@@ -88,11 +91,15 @@ start_link(TransportModule, TransportRef, Config) ->
 init([Transport, Config]) ->
     process_flag(trap_exit, true),
 
+    NPsRequired = ordsets:from_list([ipcp]),
+
     {ok, LCP} = ppp_lcp:start_link(self(), Config),
     {ok, PAP} = ppp_pap:start_link(self(), Config),
     ppp_lcp:loweropen(LCP),
     ppp_lcp:lowerup(LCP),
-    {ok, establish, #state{config = Config, transport = Transport, lcp = LCP, pap = PAP}}.
+    {ok, establish, #state{config = Config, transport = Transport, lcp = LCP, pap = PAP,
+			   nps_required = NPsRequired, nps_open = ordsets:new(),
+			   peer_addrs = orddict:new()}}.
 
 establish({packet_in, Frame}, State = #state{lcp = LCP})
   when element(1, Frame) == lcp ->
@@ -171,6 +178,14 @@ network(session_timeout, State) ->
     NewState = stop_session_timeout(State),
     lcp_close(<<"Session Timeout">>, NewState);
 
+network(network_protocol_timeout, State = #state{nps_required = NPsRequired, nps_open = NPsOpen}) ->
+    case ordsets:is_subset(NPsRequired, NPsOpen) of
+	true ->
+	    {next_state, network, State};
+	_ ->
+	    lcp_close(<<"Network Protocols start-up timeout">>, State)
+    end;
+
 network({packet_in, Frame}, State = #state{lcp = LCP})
   when element(1, Frame) == lcp ->
     io:format("LCP Frame in phase network: ~p~n", [Frame]),
@@ -178,6 +193,10 @@ network({packet_in, Frame}, State = #state{lcp = LCP})
  	down ->
 	    State1 = accounting_stop(down, State),
 	    lcp_down(State1);
+	{rejected, Protocol}
+	  when Protocol == ipcp;
+	       Protocol == ipv6cp ->
+	    network_protocol_down(Protocol, State);
 	Reply ->
 	    io:format("LCP got: ~p~n", [Reply]),
 	    {next_state, network, State}
@@ -189,16 +208,28 @@ network({packet_in, Frame}, State = #state{ipcp = IPCP})
     io:format("IPCP Frame in phase network: ~p~n", [Frame]),
     case ppp_ipcp:frame_in(IPCP, Frame) of
 	down ->
-	    phase_finished(network, State);
+	    network_protocol_down(ipcp, State);
 	ok ->
 	    {next_state, network, State};
  	{up, OurOpts, HisOpts} ->
-	    %% IP is open
-	    io:format("--------------------------~nIPCP is UP~n--------------------------~n"),
-	    State1 = accounting_start(ipcp_up, OurOpts, HisOpts, State),
-	    {next_state, network, State1};
+	    network_protocol_up(ipcp, OurOpts, HisOpts, State);
 	Reply when is_tuple(Reply) ->
 	    io:format("IPCP in phase network got: ~p~n", [Reply]),
+	    {next_state, network, State}
+    end;
+
+network({packet_in, Frame}, State = #state{ipv6cp = IPV6CP})
+  when element(1, Frame) == ipv6cp, is_pid(IPV6CP) ->
+    io:format("IPV6CP Frame in phase network: ~p~n", [Frame]),
+    case ppp_ipv6cp:frame_in(IPV6CP, Frame) of
+	down ->
+	    network_protocol_down(ipv6cp, State);
+	ok ->
+	    {next_state, network, State};
+ 	{up, OurOpts, HisOpts} ->
+	    network_protocol_up(ipv6cp, OurOpts, HisOpts, State);
+	Reply when is_tuple(Reply) ->
+	    io:format("IPV6CP in phase network got: ~p~n", [Reply]),
 	    {next_state, network, State}
     end;
 
@@ -235,7 +266,7 @@ terminating({packet_in, Frame}, State) ->
     %%   Any non-LCP packets received during this phase MUST be silently
     %%   discarded.
     io:format("non-LCP Frame in phase terminating: ~p, ignoring~n", [Frame]),
-    {next_state, establish, State};
+    {next_state, terminating, State};
 
 terminating({layer_down, lcp, Reason}, State) ->
     State1 = accounting_stop(down, State),
@@ -284,7 +315,9 @@ transport_send({TransportModule, TransportRef}, Data) ->
 transport_terminate({TransportModule, TransportRef}) ->
     TransportModule:terminate(TransportRef).
 
-transport_get_acc_counter({TransportModule, TransportRef}, IP) ->
+transport_get_acc_counter(_, undefined) ->
+    [];
+transport_get_acc_counter({TransportModule, TransportRef}, [IP|_]) ->
     case TransportModule:get_counter(TransportRef, IP) of
 	#ppp_stats{packet_count	= {PktRx, PktTx},
 		   byte_count   = {CntRx, CntTx}} ->
@@ -298,19 +331,22 @@ transport_get_acc_counter({TransportModule, TransportRef}, IP) ->
     end.
 	
 
-lowerup(#state{pap = PAP, ipcp = IPCP}) ->
+lowerup(#state{pap = PAP, ipcp = IPCP, ipv6cp = IPV6CP}) ->
     ppp_pap:lowerup(PAP),
     ppp_ipcp:lowerup(IPCP),
+    ppp_ipv6cp:lowerup(IPV6CP),
     ok.
 
-lowerdown(#state{pap = PAP, ipcp = IPCP}) ->
+lowerdown(#state{pap = PAP, ipcp = IPCP, ipv6cp = IPV6CP}) ->
     ppp_pap:lowerdown(PAP),
     ppp_ipcp:lowerdown(IPCP),
+    ppp_ipv6cp:lowerdown(IPV6CP),
     ok.
 
-lowerclose(Reason, #state{pap = PAP, ipcp = IPCP}) ->
+lowerclose(Reason, #state{pap = PAP, ipcp = IPCP, ipv6cp = IPV6CP}) ->
     ppp_pap:lowerclose(PAP, Reason),
     ppp_ipcp:lowerclose(IPCP, Reason),
+    ppp_ipv6cp:lowerclose(IPV6CP, Reason),
     ok.
 
 do_auth_peer([], State) ->
@@ -374,7 +410,31 @@ phase_open(network, State = #state{config = Config}) ->
     {ok, IPCP} = ppp_ipcp:start_link(self(), Config),
     ppp_ipcp:lowerup(IPCP),
     ppp_ipcp:loweropen(IPCP),
-    {next_state, network, NewState2#state{ipcp = IPCP}}.
+    %% {ok, IPV6CP} = ppp_ipv6cp:start_link(self(), Config),
+    %% ppp_ipv6cp:lowerup(IPV6CP),
+    %% ppp_ipv6cp:loweropen(IPV6CP),
+    IPV6CP = undefined,
+    gen_fsm:send_event_after(?NETWORK_PROTOCOL_TIMEOUT, network_protocol_timeout),
+    {next_state, network, NewState2#state{ipcp = IPCP, ipv6cp = IPV6CP}}.
+
+network_protocol_up(Protocol, OurOpts, HisOpts, State) ->
+    io:format("--------------------------~n~p is UP~n--------------------------~n", [Protocol]),
+    NewState0 = State#state{nps_open = ordsets:add_element(Protocol, State#state.nps_open)},
+    NewState1 = accounting_init(Protocol, OurOpts, HisOpts, NewState0),
+    NewState2 = check_accounting_start(NewState1),
+    {next_state, network, NewState2}.
+
+network_protocol_down(Protocol, State = #state{nps_required = NPsRequired, nps_open = NPsOpen}) ->
+    io:format("--------------------------~n~p is DOWN~n--------------------------~n", [Protocol]),
+    NewState = State#state{nps_open = ordsets:del_element(Protocol, NPsOpen)},
+    case ordsets:is_element(Protocol, NPsRequired) of
+	true ->
+	    %% a required Network Protocol is down, kill the entire link
+	    Msg = iolist_to_binary(io_lib:format("network protocol ~p is required, but was rejected", [Protocol])),
+	    lcp_close(Msg, NewState);
+	_ ->
+	    {next_state, network, NewState}
+    end.
 
 start_session_timeout(State = #state{config = Config}) ->
     case proplists:get_value(session_timeout, Config) of
@@ -397,13 +457,36 @@ get_interim_accounting(Config) ->
 	Value ->
 	    Value
     end.
-	    
-accounting_start(init, State) ->
+
+accounting_init(ipcp, _OurOpts,
+		_HisOpts = #ipcp_opts{hisaddr = HisAddr},
+		State = #state{config = Config, peer_addrs = Addrs}) ->
+    NewAddrs = orddict:append(ipcp, HisAddr, Addrs),
+    NewConfig = append_accounting_attr({'Framed-IP-Address', HisAddr}, Config),
+    State#state{config = NewConfig, peer_addrs = NewAddrs};
+accounting_init(ipv6cp,	_OurOpts,
+		_HisOpts = #ipv6cp_opts{hisid = HisId},
+		State = #state{config = Config, peer_addrs = Addrs}) ->
+    NewAddrs = orddict:append(ipv6cp, HisId, Addrs),
+    NewConfig = append_accounting_attr({'Framed-Interface-Id', HisId}, Config),
+    State#state{config = NewConfig, peer_addrs = NewAddrs}.
+
+%% check wether all required Network Protocol are open, send Accounting Start if so
+check_accounting_start(State = #state{nps_required = NPsRequired, nps_open = NPsOpen, accounting_start = undefined}) ->
+    case ordsets:is_subset(NPsRequired, NPsOpen) of
+	true ->
+	    accounting_start(network_up, State);
+	_ ->
+	    State
+    end;
+check_accounting_start(State) ->
     State.
 
-accounting_start(ipcp_up, OurOpts, HisOpts,
-		 State = #state{config = Config}) ->
-    NewState0 = State#state{accounting_start = now_ticks(), our_ipcp_opts = OurOpts, his_ipcp_opts = HisOpts},
+accounting_start(init, State) ->
+    State;
+
+accounting_start(network_up, State = #state{config = Config}) ->
+    NewState0 = State#state{accounting_start = now_ticks()},
     io:format("--------------------------~nAccounting: OPEN~n--------------------------~n"),
     spawn(fun() -> do_accounting_start(NewState0) end),
     case get_interim_accounting(Config) of
@@ -431,10 +514,18 @@ accounting_stop(_Reason,
     Now = now_ticks(),
     cancel_timer(Ref),
     spawn(fun() -> do_accounting_stop(Now, State) end),
-    State#state{interim_ref = undefined}.
+    State#state{accounting_start = undefined, interim_ref = undefined}.
+
+append_accounting_attr(Opt, Config) ->
+    Accounting = proplists:get_value(accounting, Config, []),
+    lists:keystore(accounting, 1, Config, {accounting, [Opt|Accounting]}).
 
 accounting_attrs([], Attrs) ->
     Attrs;
+accounting_attrs([{'Framed-IP-Address', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Framed_IP_Address, Value}|Attrs]);
+accounting_attrs([{'Framed-Interface-Id', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Framed_Interface_Id, Value}|Attrs]);
 accounting_attrs([{session_id, Value}|Rest], Attrs) ->
     Id = io_lib:format("~40.16.0B", [Value]),
     accounting_attrs(Rest, [{?Acct_Session_Id, Id}|Attrs]);
@@ -493,8 +584,7 @@ accounting_attrs([H|Rest], Attrs) ->
     accounting_attrs(Rest, Attrs).
 
 do_accounting_start(#state{config = Config,
-			   peerid = PeerId,
-			   his_ipcp_opts = HisOpts}) ->
+			   peerid = PeerId}) ->
     Accounting = proplists:get_value(accounting, Config, []),
     UserName = case proplists:get_value(username, Accounting) of
 		   undefined -> PeerId;
@@ -506,8 +596,7 @@ do_accounting_start(#state{config = Config,
 	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
-	     {?NAS_Identifier, NasId},
-	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr}
+	     {?NAS_Identifier, NasId}
 	     | accounting_attrs(Accounting, [])],
     Req = #radius_request{
 	     cmd = accreq,
@@ -519,15 +608,17 @@ do_accounting_start(#state{config = Config,
 do_accounting_interim(Now, #state{config = Config,
 				  transport = Transport,
 				  peerid = PeerId,
-				  accounting_start = Start,
-				  his_ipcp_opts = HisOpts}) ->
+				  peer_addrs = Addrs,
+				  accounting_start = Start}) ->
     io:format("do_accounting_interim~n"),
     Accounting = proplists:get_value(accounting, Config, []),
     UserName = case proplists:get_value(username, Accounting) of
 		   undefined -> PeerId;
 		   Value -> Value
 	       end,
-    Counter = transport_get_acc_counter(Transport, HisOpts#ipcp_opts.hisaddr),
+    HisAddr = proplists:get_value(ipcp, Addrs),
+    io:format("HisAddr: ~p~n", [HisAddr]),
+    Counter = transport_get_acc_counter(Transport, HisAddr),
     {ok, NasId} = application:get_env(nas_identifier),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Update},
@@ -535,7 +626,6 @@ do_accounting_interim(Now, #state{config = Config,
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
 	     {?NAS_Identifier, NasId},
-	     {?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
 	     {?RSession_Time, round((Now - Start) / 10)}
 	     | Counter]
 	++ accounting_attrs(Accounting, []),
@@ -549,31 +639,30 @@ do_accounting_interim(Now, #state{config = Config,
 do_accounting_stop(Now, #state{config = Config,
 			       transport = Transport,
 			       peerid = PeerId,
-			       accounting_start = Start,
-			       his_ipcp_opts = HisOpts}) ->
+			       peer_addrs = Addrs,
+			       accounting_start = Start}) ->
     io:format("do_accounting_stop~n"),
     Accounting = proplists:get_value(accounting, Config, []),
     UserName = case proplists:get_value(username, Accounting) of
 		   undefined -> PeerId;
 		   Value -> Value
 	       end,
+    HisAddr = proplists:get_value(ipcp, Addrs),
+    io:format("HisAddr: ~p~n", [HisAddr]),
+    Start0 = if Start =:= undefined -> Now;
+		true -> Start
+	     end,
+    Counter = transport_get_acc_counter(Transport, HisAddr),
     {ok, NasId} = application:get_env(nas_identifier),
-    RadAttrs = [
+    Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Stop},
 	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
-	     {?NAS_Identifier, NasId}],
-    IPAttrs = if
-		  is_record(HisOpts, ipcp_opts) ->
-		      Counter = transport_get_acc_counter(Transport, HisOpts#ipcp_opts.hisaddr),
-		      [{?Framed_IP_Address, HisOpts#ipcp_opts.hisaddr},
-		       {?RSession_Time, round((Now - Start) / 10)}
-		       | Counter];
-		  true ->
-		      [{?RSession_Time, 0}]
-	      end,
-    Attrs = RadAttrs ++ IPAttrs ++ accounting_attrs(Accounting, []),
+	     {?NAS_Identifier, NasId},
+	     {?RSession_Time, round((Now - Start0) / 10)}
+	     | Counter]
+	++ accounting_attrs(Accounting, []),
     Req = #radius_request{
 	     cmd = accreq,
 	     attrs = Attrs,

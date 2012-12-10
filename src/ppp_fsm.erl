@@ -912,10 +912,14 @@ opened({_, 'CP-Code-Reject', _Id, _RejectedPacket}, _From, State) ->
 %%     reply(ok, opened, State);
 
 %% RXJ-
-opened({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
-    {Reply, NewState0} = this_layer_down(State),
-    NewState1 = start_terminate_link(<<>>, NewState0),
-    reply(Reply, stopping, NewState1);
+%% opened({_, 'CP-Protocol-Reject', _Id, _RejectedProtocol, _RejectedInfo}, _From, State) ->
+%%     {Reply, NewState0} = this_layer_down(State),
+%%     NewState1 = start_terminate_link(<<>>, NewState0),
+%%     reply(Reply, stopping, NewState1);
+
+%% %% RXJ+
+opened({_, 'CP-Protocol-Reject', _Id, RejectedProtocol, _RejectedInfo}, _From, State) ->
+    reply({rejected, RejectedProtocol}, opened, State);
 
 %% RXR
 opened({_, 'CP-Discard-Request', _Id}, _From, State) ->
