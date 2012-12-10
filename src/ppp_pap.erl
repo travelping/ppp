@@ -541,7 +541,7 @@ process_gen_attrs({#attribute{name = Name}, Value} , {_Verdict, _Opts} = Acc0) -
     Acc0;
 
 process_gen_attrs({Attr, Value} , {_Verdict, _Opts} = Acc0) ->
-    io:format("unhandled undecoded reply AVP: ~s: ~p~n", [Attr, Value]),
+    io:format("unhandled undecoded reply AVP: ~w: ~p~n", [Attr, Value]),
     Acc0.
 
 process_unexpected_value({#attribute{name = Name}, Value} , {_Verdict, Opts}) ->
