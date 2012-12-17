@@ -247,6 +247,8 @@ terminating(interim_accounting, State) ->
     {next_state, terminating, State};
 terminating(session_timeout, State) ->
     {next_state, terminating, State};
+terminating(network_protocol_timeout, State) ->
+    {next_state, terminating, State};
 
 terminating({packet_in, Frame}, State = #state{lcp = LCP})
   when element(1, Frame) == lcp ->
