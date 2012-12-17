@@ -1189,7 +1189,7 @@ state_transitions(_NewStateName, State) ->
     State.
 
 reply(Reply, NextStateName, State) ->
-    io:format("FSM: going to: ~p~n", [NextStateName]),
+    io:format("FSM ~p: going to: ~p~n", [State#state.protocol, NextStateName]),
     NewState = state_transitions(NextStateName, State),
     case NextStateName of
 	opened ->
@@ -1200,7 +1200,7 @@ reply(Reply, NextStateName, State) ->
     end.
 
 next_state(NextStateName, State) ->
-    io:format("FSM: going to: ~p~n", [NextStateName]),
+    io:format("FSM ~p: going to: ~p~n", [State#state.protocol, NextStateName]),
     NewState = state_transitions(NextStateName, State),
     case NextStateName of
 	opened ->
