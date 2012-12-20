@@ -772,8 +772,7 @@ ack_sent({_, 'CP-Configure-Request', Id, Options}, _From, State) ->
     case Verdict of
 	ack ->
 	    %% RCR+
-	    NewState1 = send_configure_ack(Id, Options, NewState0),
-	    reply(ok, ack_sent, NewState1);
+	    reply(ok, ack_sent, NewState0);
 	_ ->
 	    %% RCR-
 	    reply(ok, req_sent, NewState0)
