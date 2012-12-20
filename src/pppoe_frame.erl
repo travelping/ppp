@@ -37,18 +37,18 @@ tag(?SERVICE_NAME_ERROR)	-> 'Service-Name-Error';
 tag(?AC_SYSTEM_ERROR)		-> 'AC-System-Error';
 tag(?GENERIC_ERROR)		-> 'Generic-Error';
 
-tag('End-Of-List')		-> '?END_OF_LIST';
-tag('Service-Name')		-> '?SERVICE_NAME';
-tag('AC-Name')			-> '?AC_NAME';
-tag('Host-Uniq')		-> '?HOST_UNIQ';
-tag('AC-Cookie')		-> '?AC_COOKIE';
-tag('Vendor-Specific')		-> '?VENDOR_SPECIFIC';
-tag('Relay-Session-Id')		-> '?RELAY_SESSION_ID';
-tag('Service-Name-Error')	-> '?SERVICE_NAME_ERROR';
-tag('AC-System-Error')		-> '?AC_SYSTEM_ERROR';
-tag('Generic-Error')		-> '?GENERIC_ERROR';
+tag('End-Of-List')		-> ?END_OF_LIST;
+tag('Service-Name')		-> ?SERVICE_NAME;
+tag('AC-Name')			-> ?AC_NAME;
+tag('Host-Uniq')		-> ?HOST_UNIQ;
+tag('AC-Cookie')		-> ?AC_COOKIE;
+tag('Vendor-Specific')		-> ?VENDOR_SPECIFIC;
+tag('Relay-Session-Id')		-> ?RELAY_SESSION_ID;
+tag('Service-Name-Error')	-> ?SERVICE_NAME_ERROR;
+tag('AC-System-Error')		-> ?AC_SYSTEM_ERROR;
+tag('Generic-Error')		-> ?GENERIC_ERROR;
 
-tag(X)				-> X.
+tag(X) when is_integer(X)	-> X.
 
 dslf_tag(16#01) -> 'ADSL-Agent-Circuit-Id';
 dslf_tag(16#02) -> 'ADSL-Agent-Remote-Id';
