@@ -1018,8 +1018,8 @@ handle_info(Info, StateName, State) ->
     io:format("Info: ~p~n", [Info]),
     next_state(StateName, State).
 
-terminate(_Reason, _StateName, _State) ->
-    io:format("ppp_fsm ~p terminated~n", [self()]),
+terminate(_Reason, _StateName, State) ->
+    io:format("~s for ~s (~p) terminated~n", [?MODULE, State#state.protocol, self()]),
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->
