@@ -4,7 +4,7 @@
 
 %% API
 -export([start_link/3]).
--export([packet_in/2, send/2]).
+-export([packet_in/2, send/2, link_down/1]).
 -export([layer_up/3, layer_down/3, layer_started/3, layer_finished/3]).
 -export([auth_withpeer/3, auth_peer/3]).
 -export([accounting_on/0]).
@@ -62,6 +62,9 @@ packet_in(Connection, Packet) ->
 
 send(Connection, Packet) ->
     gen_fsm:send_all_state_event(Connection, {packet_out, Packet}).
+
+link_down(Connection) ->
+    gen_fsm:send_event(Connection, link_down).
 
 layer_up(Link, Layer, Info) ->
     gen_fsm:send_event(Link, {layer_up, Layer, Info}).
@@ -129,6 +132,9 @@ establish({packet_in, Frame}, State) ->
     io:format("non-LCP Frame in phase establish: ~p, ignoring~n", [Frame]),
     {next_state, establish, State};
 
+establish(link_down, State) ->
+    lcp_close(<<"Link down">>, State);
+
 establish({layer_down, lcp, Reason}, State) ->
     lowerdown(State),
     lowerclose(Reason, State),
@@ -168,7 +174,10 @@ auth({packet_in, Frame}, State) ->
     %%   monitoring packets are allowed during this phase.  All other packets
     %%   received during this phase MUST be silently discarded.
     io:format("non-Auth Frame: ~p, ignoring~n", [Frame]),
-    {next_state, auth, State}.
+    {next_state, auth, State};
+
+auth(link_down, State) ->
+    lcp_close(<<"Link down">>, State).
 
 network(interim_accounting, State) ->
     NewState = accounting_interim(State),
@@ -237,6 +246,9 @@ network({packet_in, Frame}, State) ->
     protocol_reject(Frame, State),
     {next_state, network, State};
 
+network(link_down, State) ->
+    lcp_close(<<"Link down">>, State);
+
 network({layer_down, lcp, Reason}, State) ->
     State1 = accounting_stop(down, State),
     lowerdown(State1),
@@ -268,6 +280,9 @@ terminating({packet_in, Frame}, State) ->
     %%   Any non-LCP packets received during this phase MUST be silently
     %%   discarded.
     io:format("non-LCP Frame in phase terminating: ~p, ignoring~n", [Frame]),
+    {next_state, terminating, State};
+
+terminating(link_down, State) ->
     {next_state, terminating, State};
 
 terminating({layer_down, lcp, Reason}, State) ->
