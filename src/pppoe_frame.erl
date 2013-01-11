@@ -128,13 +128,14 @@ encode({ppp, SessionId, PayLoad}) ->
 encode({Code, SessionId, TLV})
   when Code == pado; Code == padi; Code == padr;
        Code == pads; Code == padt ->
-    PayLoad = encode_tlv(TLV),
+    PayLoad = encode_tlv(TLV, <<>>),
     <<?PPPOE_VERSION:4, ?PPPOE_TYPE:4/integer, (pppoe_code(Code)):8,
       SessionId:16, (size(PayLoad)):16, PayLoad/binary>>.
 
-encode_tlv(Tag, Value) ->
-    <<(tag(Tag)):16, (size(Value)):16/integer, Value/binary>>.
-
-encode_tlv(TLV) ->
-    << << (encode_tlv(Tag, Value))/binary >> || {Tag, Value} <- TLV>>.
+encode_tlv([], B) ->
+    B;
+encode_tlv([{Tag, Value}|T], B) ->
+    encode_tlv(T, << B/binary, (tag(Tag)):16, (size(Value)):16/integer, Value/binary>>);
+encode_tlv([TLVs|T], B) when is_list(TLVs) ->
+    encode_tlv(T, encode_tlv(TLVs, B)).
 
