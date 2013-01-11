@@ -3,7 +3,7 @@
 -behaviour(regine_server).
 
 %% API
--export([start_link/0, new/4, lookup/1]).
+-export([start_link/0, new/5, lookup/1, lookup/2]).
 
 %% regine_server callbacks
 -export([init/1, handle_register/4, handle_unregister/3, handle_pid_remove/3, handle_death/3, terminate/2]).
@@ -20,11 +20,14 @@
 start_link() ->
     regine_server:start_link({local, ?SERVER}, ?MODULE, []).
 
-new(HandlerMod, HandlerInfo, SessionId, PPPConfig) ->
+new(HandlerMod, HandlerInfo, PeerId, SessionId, PPPConfig) ->
     {ok, Session} = ppp_link_sup:new(HandlerMod, HandlerInfo, PPPConfig),
     io:format("new Session: ~p, ~p~n", [SessionId, Session]),
-    regine_server:register(?SERVER, Session, SessionId, undefined),
+    regine_server:register(?SERVER, Session, PeerId, {PeerId, SessionId}),
     {ok, Session}.
+
+lookup(PeerId, SessionId) ->
+    lookup({PeerId, SessionId}).
 
 lookup(SessionId) ->
     io:format("session lookup: ~p~n", [ets:lookup(?SERVER, SessionId)]),
@@ -44,13 +47,19 @@ init([]) ->
     ets:new(?SERVER, [bag, protected, named_table, {read_concurrency, true}]),
     {ok, #state{}}.
 
-handle_register(Pid, SessionId, _, State) ->
-    ets:insert(?SERVER, {SessionId, Pid}),
-    {ok, [SessionId], State}.
+handle_register(Pid, SessionId, OtherSessionId, State) ->
+    List = [SessionId|[OtherSessionId || OtherSessionId /= undefined]],
+    ets:insert(?SERVER, [{Id, Pid} || Id <- List]),
+    {ok, List, State}.
 
-handle_unregister(SessionId, _, State) ->
+handle_unregister(SessionId, OtherSessionId, State) ->
     Pids = ets:lookup(?SERVER, SessionId),
     ets:delete(?SERVER, SessionId),
+    if OtherSessionId /= undefined ->
+	    ets:delete(?SERVER, OtherSessionId);
+       true ->
+	    ok
+    end,
     {Pids, State}.
 
 handle_death(_Pid, _Reason, State) ->
@@ -62,3 +71,7 @@ handle_pid_remove(Pid, SessionIds, State) ->
 
 terminate(_Reason, _State) ->
     ok.
+
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
