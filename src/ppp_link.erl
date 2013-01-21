@@ -176,6 +176,9 @@ auth({packet_in, Frame}, State) ->
     io:format("non-Auth Frame: ~p, ignoring~n", [Frame]),
     {next_state, auth, State};
 
+auth({auth_peer, pap, fail}, State) ->
+    lcp_close(<<"Authentication failed">>, State);
+
 auth(link_down, State) ->
     lcp_close(<<"Link down">>, State).
 
@@ -255,6 +258,9 @@ network({layer_down, lcp, Reason}, State) ->
     lowerclose(Reason, State1),
     lcp_down(State1).
 
+%% drain events
+terminating({auth_peer, pap, fail}, State) ->
+    {next_state, terminating, State};
 terminating(interim_accounting, State) ->
     {next_state, terminating, State};
 terminating(session_timeout, State) ->
