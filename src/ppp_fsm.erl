@@ -1163,6 +1163,7 @@ ignore_frame_in(StateName, Frame) ->
 invalid_event(StateName, Event) ->
     io:format("invalid event ~p in state ~p~n", [Event, StateName]).
 
+-spec get_counter('Terminate-Ack' | 'Terminate-Request' | 'Configure-Request' | 'Configure-Nak', #state{}) -> integer().
 get_counter('Terminate-Ack', _State) ->
     0;
 get_counter('Terminate-Request', State) ->
@@ -1172,6 +1173,7 @@ get_counter('Configure-Request', State) ->
 get_counter('Configure-Nak', State) ->
     State#state.failure_count.
 
+-spec dec_counter('Terminate-Request' | 'Configure-Request' | 'Configure-Nak', #state{}) -> #state{}.
 dec_counter('Terminate-Request', State = #state{term_restart_count = Count})
   when Count > 0 ->
     State#state{term_restart_count = Count - 1};
@@ -1180,7 +1182,9 @@ dec_counter('Configure-Request', State = #state{conf_restart_count = Count})
     State#state{conf_restart_count = Count - 1};
 dec_counter('Configure-Nak', State = #state{failure_count = Count})
   when Count > 0 ->
-    State#state{failure_count = Count - 1}.
+    State#state{failure_count = Count - 1};
+dec_counter(_, State) ->
+    State.
 
 state_transitions(NextStateName, State = #state{timer = Timer})
   when is_reference(Timer) andalso
