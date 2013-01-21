@@ -3,7 +3,7 @@
 -behaviour(gen_fsm).
 
 %% API
--export([start_link/3]).
+-export([start_link/3, start_link/4, start/3, start/4]).
 -export([fsm_frame_in/2, fsm_lowerup/1, fsm_lowerdown/1, fsm_loweropen/1, fsm_lowerclose/2]).
 
 -include("ppp_fsm.hrl").
@@ -156,6 +156,13 @@ send_event(FSM, Event) ->
 %%--------------------------------------------------------------------
 start_link(Link, Config, ProtoMod) ->
     gen_fsm:start_link(?MODULE, [Link, Config, ProtoMod], []).
+start_link(RegName, Link, Config, ProtoMod) ->
+    gen_fsm:start_link(RegName, ?MODULE, [Link, Config, ProtoMod], []).
+
+start(Link, Config, ProtoMod) ->
+    gen_fsm:start(?MODULE, [Link, Config, ProtoMod], []).
+start(RegName, Link, Config, ProtoMod) ->
+    gen_fsm:start(RegName, ?MODULE, [Link, Config, ProtoMod], []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
