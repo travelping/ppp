@@ -3,7 +3,7 @@
 -behaviour(regine_server).
 
 %% API
--export([start_link/0, new/5, lookup/1, lookup/2]).
+-export([start_link/0, new/6, lookup/1, lookup/2]).
 
 %% regine_server callbacks
 -export([init/1, handle_register/4, handle_unregister/3, handle_pid_remove/3, handle_death/3, terminate/2]).
@@ -20,8 +20,8 @@
 start_link() ->
     regine_server:start_link({local, ?SERVER}, ?MODULE, []).
 
-new(HandlerMod, HandlerInfo, PeerId, SessionId, PPPConfig) ->
-    {ok, Session} = ppp_link_sup:new(HandlerMod, HandlerInfo, PPPConfig),
+new(HandlerMod, HandlerPid, HandlerInfo, PeerId, SessionId, PPPConfig) ->
+    {ok, Session} = ppp_link_sup:new(HandlerMod, HandlerPid, HandlerInfo, PPPConfig),
     io:format("new Session: ~p, ~p~n", [SessionId, Session]),
     regine_server:register(?SERVER, Session, PeerId, {PeerId, SessionId}),
     {ok, Session}.

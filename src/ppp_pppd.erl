@@ -4,7 +4,7 @@
 
 %% API
 -export([start_link/1]).
--export([send/2]).
+-export([send/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -18,8 +18,8 @@
 %%% API
 %%%===================================================================
 
-send(TransportRef, Packet) ->
-    gen_server:call(TransportRef, {send, Packet}).
+send(TransportPid, _TransportRef, Packet) ->
+    gen_server:call(TransportPid, {send, Packet}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -49,7 +49,7 @@ start_link(Role) ->
 init([Role]) ->
     Args = gen_opts() ++ role_opts(Role),
     Port = open_port({spawn_executable, "/usr/sbin/pppd"}, [exit_status, binary, {args, Args}]),
-    {ok, Connection} = ppp_link:start_link(?MODULE, self(), []),
+    {ok, Connection} = ppp_link:start_link(?MODULE, self(), [], []),
     {ok, #state{port = Port, connection = Connection}}.
 
 %%--------------------------------------------------------------------

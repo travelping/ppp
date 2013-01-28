@@ -3,7 +3,7 @@
 -behaviour(gen_fsm).
 
 %% API
--export([start_link/3]).
+-export([start_link/4]).
 -export([packet_in/2, send/2, link_down/1]).
 -export([layer_up/3, layer_down/3, layer_started/3, layer_finished/3]).
 -export([auth_withpeer/3, auth_peer/3]).
@@ -31,6 +31,7 @@
 -record(state, {
 	  config		:: list(),         		%% config options proplist
 	  transport		:: pid(), 			%% Transport Layer
+	  transport_info	:: any(), 			%% Transport Layer Info
 	  lcp			:: pid(), 			%% LCP protocol driver
 	  pap			:: pid(), 			%% PAP protocol driver
 	  ipcp			:: pid(), 			%% IPCP protocol driver
@@ -84,14 +85,14 @@ auth_withpeer(Link, Layer, Info) ->
 auth_peer(Link, Layer, Info) ->
     gen_fsm:send_event(Link, {auth_peer, Layer, Info}).
 
-start_link(TransportModule, TransportRef, Config) ->
-    gen_fsm:start_link(?MODULE, [{TransportModule, TransportRef}, Config], []).
+start_link(TransportModule, TransportPid, TransportRef, Config) ->
+    gen_fsm:start_link(?MODULE, [{TransportModule, TransportRef}, TransportPid, Config], []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
 %%%===================================================================
 
-init([Transport, Config]) ->
+init([TransportInfo, TransportPid, Config]) ->
     process_flag(trap_exit, true),
 
     NPsRequired = ordsets:from_list([ipcp]),
@@ -100,7 +101,8 @@ init([Transport, Config]) ->
     {ok, PAP} = ppp_pap:start_link(self(), Config),
     ppp_lcp:loweropen(LCP),
     ppp_lcp:lowerup(LCP),
-    {ok, establish, #state{config = Config, transport = Transport, lcp = LCP, pap = PAP,
+    {ok, establish, #state{config = Config, transport = TransportPid , transport_info = TransportInfo,
+			   lcp = LCP, pap = PAP,
 			   nps_required = NPsRequired, nps_open = ordsets:new(),
 			   peer_addrs = orddict:new()}}.
 
@@ -297,14 +299,14 @@ terminating({layer_down, lcp, Reason}, State) ->
     lowerclose(Reason, State1),
     lcp_down(State1);
 
-terminating({layer_finished, lcp, terminated}, State = #state{transport = Transport}) ->
+terminating({layer_finished, lcp, terminated}, State) ->
     io:format("LCP in phase terminating got: terminated~n"),
     %% TODO: might want to restart LCP.....
-    transport_terminate(Transport),
+    transport_terminate(State),
     {stop, normal, State}.
 
-handle_event({packet_out, Frame}, StateName, State = #state{transport = Transport}) ->
-    transport_send(Transport, Frame),
+handle_event({packet_out, Frame}, StateName, State) ->
+    transport_send(State, Frame),
     {next_state, StateName, State};
 
 handle_event(_Event, StateName, State) ->
@@ -332,16 +334,16 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 protocol_reject(Request, #state{lcp = LCP}) ->
     ppp_lcp:protocol_reject(LCP, Request).
 
-transport_send({TransportModule, TransportRef}, Data) ->
-    TransportModule:send(TransportRef, Data).
+transport_send(#state{transport = Transport, transport_info = {TransportModule, TransportRef}}, Data) ->
+    TransportModule:send(Transport, TransportRef, Data).
 
-transport_terminate({TransportModule, TransportRef}) ->
-    TransportModule:terminate(TransportRef).
+transport_terminate(#state{transport = Transport, transport_info = {TransportModule, TransportRef}}) ->
+    TransportModule:terminate(Transport, TransportRef).
 
 transport_get_acc_counter(_, undefined) ->
     [];
-transport_get_acc_counter({TransportModule, TransportRef}, [IP|_]) ->
-    case TransportModule:get_counter(TransportRef, IP) of
+transport_get_acc_counter(#state{transport = Transport, transport_info = {TransportModule, TransportRef}}, [IP|_]) ->
+    case TransportModule:get_counter(Transport, TransportRef, IP) of
 	#ppp_stats{packet_count	= {PktRx, PktTx},
 		   byte_count   = {CntRx, CntTx}} ->
 	    [{?Acct_Output_Gigawords, CntTx div 16#100000000},
@@ -628,11 +630,10 @@ do_accounting_start(#state{config = Config,
     {ok, NAS} = application:get_env(radius_acct_server),
     eradius_client:send_request(NAS, Req).
 
-do_accounting_interim(Now, #state{config = Config,
-				  transport = Transport,
-				  peerid = PeerId,
-				  peer_addrs = Addrs,
-				  accounting_start = Start}) ->
+do_accounting_interim(Now, State = #state{config = Config,
+					  peerid = PeerId,
+					  peer_addrs = Addrs,
+					  accounting_start = Start}) ->
     io:format("do_accounting_interim~n"),
     Accounting = proplists:get_value(accounting, Config, []),
     UserName = case proplists:get_value(username, Accounting) of
@@ -641,7 +642,7 @@ do_accounting_interim(Now, #state{config = Config,
 	       end,
     HisAddr = proplists:get_value(ipcp, Addrs),
     io:format("HisAddr: ~p~n", [HisAddr]),
-    Counter = transport_get_acc_counter(Transport, HisAddr),
+    Counter = transport_get_acc_counter(State, HisAddr),
     {ok, NasId} = application:get_env(nas_identifier),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Update},
@@ -659,11 +660,10 @@ do_accounting_interim(Now, #state{config = Config,
     {ok, NAS} = application:get_env(radius_acct_server),
     eradius_client:send_request(NAS, Req).
 
-do_accounting_stop(Now, #state{config = Config,
-			       transport = Transport,
-			       peerid = PeerId,
-			       peer_addrs = Addrs,
-			       accounting_start = Start}) ->
+do_accounting_stop(Now, State = #state{config = Config,
+				       peerid = PeerId,
+				       peer_addrs = Addrs,
+				       accounting_start = Start}) ->
     io:format("do_accounting_stop~n"),
     Accounting = proplists:get_value(accounting, Config, []),
     UserName = case proplists:get_value(username, Accounting) of
@@ -675,7 +675,7 @@ do_accounting_stop(Now, #state{config = Config,
     Start0 = if Start =:= undefined -> Now;
 		true -> Start
 	     end,
-    Counter = transport_get_acc_counter(Transport, HisAddr),
+    Counter = transport_get_acc_counter(State, HisAddr),
     {ok, NasId} = application:get_env(nas_identifier),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Stop},
