@@ -107,6 +107,8 @@ auth_withpeer(FSM, UserName, Password) ->
 %%%===================================================================
 
 init([Link, Config]) ->
+    process_flag(trap_exit, true),
+
     State = #state{
       link = Link,
       timeouttime = proplists:get_value('pap-restart', Config, ?DEFTIMEOUT),
@@ -169,7 +171,12 @@ handle_info({timeout, TimerRef, timeout}, State = #state{s_timer = TimerRef}) ->
     NewState = State#state{s_timer = undefined},
     fsm_server_cast(timeout, NewState);
 
-handle_info(_Info, State) ->
+handle_info({'EXIT', Link, _Reason}, State = #state{link = Link}) ->
+    io:format("~s: Link ~p terminated~n", [?MODULE, Link]),
+    {stop, normal, State};
+
+handle_info(Info, State) ->
+    io:format("~s: got info: ~p~n", [?MODULE, Info]),
     {noreply, State}.
 	
 terminate(_Reason, _State) ->

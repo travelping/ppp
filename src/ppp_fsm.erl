@@ -1021,8 +1021,12 @@ handle_sync_event(Event, _From, StateName, State) ->
     Reply = ok,
     reply(Reply, StateName, State).
 
+handle_info({'EXIT', Link, _Reason}, _StateName, State = #state{link = Link}) ->
+    io:format("Link ~p terminated~n", [Link]),
+    {stop, normal, State};
+
 handle_info(Info, StateName, State) ->
-    io:format("Info: ~p~n", [Info]),
+    io:format("~s: in state ~s, got info: ~p~n", [?MODULE, StateName, Info]),
     next_state(StateName, State).
 
 terminate(_Reason, _StateName, State) ->

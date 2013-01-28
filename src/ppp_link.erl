@@ -316,8 +316,13 @@ handle_sync_event(_Event, _From, StateName, State) ->
     Reply = ok,
     {reply, Reply, StateName, State}.
 
+handle_info({'EXIT', Transport, _Reason}, _StateName, State = #state{transport = Transport}) ->
+    io:format("Transport ~p terminated~n", [Transport]),
+    State1 = accounting_stop(down, State),
+    {stop, normal, State1};
+
 handle_info(Info, StateName, State) ->
-    io:format("Info: ~p~n", [Info]),
+    io:format("~s: in state ~s, got info: ~p~n", [?MODULE, StateName, Info]),
     {next_state, StateName, State}.
 
 terminate(_Reason, _StateName, _State) ->
