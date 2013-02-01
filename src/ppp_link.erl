@@ -400,15 +400,22 @@ auth_success(Direction, State = #state{auth_pending = Pending}) ->
 	    {next_state, auth, NewState}
     end.
 
-auth_reply({auth_peer, success, PeerId, Opts}, State = #state{config = Config}) ->
+proplists_merge_recusive(undefined, L2) when is_list(L2) ->
+    L2;
+proplists_merge_recusive(L1, L2) when is_list(L1), is_list(L2) ->
+    L = lists:foldl(fun({Key, List}, Acc) when is_list(List) ->
+			    New = proplists_merge_recusive(proplists:get_value(Key, Acc), List),
+			    lists:keystore(Key, 1, Acc, {Key, New});
+		       (Opt, Acc) ->
+			    lists:keystore(element(1, Opt), 1, Acc, Opt)
+		    end,
+		    proplists:unfold(L1),
+		    proplists:unfold(L2)),
+    proplists:compact(L).
 
-    Config0 = lists:foldl(fun(Opt, Acc) ->
-				  lists:keystore(element(1, Opt), 1, Acc, Opt)
-			  end,
-			  proplists:unfold(Config),
-			  proplists:unfold(Opts)),
-    Config1 = proplists:compact(Config0),
-    NewState = State#state{config = Config1, peerid = PeerId},
+auth_reply({auth_peer, success, PeerId, Opts}, State = #state{config = Config}) ->
+    Config0 = proplists_merge_recusive(Config, Opts),
+    NewState = State#state{config = Config0, peerid = PeerId},
     auth_success(auth_peer, NewState);
 
 auth_reply({auth_peer, fail}, State) ->
