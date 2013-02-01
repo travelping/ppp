@@ -563,6 +563,8 @@ accounting_attrs([{'Framed-IP-Address', Value}|Rest], Attrs) ->
     accounting_attrs(Rest, [{?Framed_IP_Address, Value}|Attrs]);
 accounting_attrs([{'Framed-Interface-Id', Value}|Rest], Attrs) ->
     accounting_attrs(Rest, [{?Framed_Interface_Id, Value}|Attrs]);
+accounting_attrs([{'Framed-IP-Netmask', Value}|Rest], Attrs) ->
+    accounting_attrs(Rest, [{?Framed_IP_Netmask, Value}|Attrs]);
 accounting_attrs([{session_id, Value}|Rest], Attrs) ->
     Id = io_lib:format("~40.16.0B", [Value]),
     accounting_attrs(Rest, [{?Acct_Session_Id, Id}|Attrs]);

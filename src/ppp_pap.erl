@@ -538,6 +538,9 @@ process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {255,255,255,254}}, {Ver
 process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {A, B, C, D}}, {Verdict, Opts}) ->
     {Verdict, [{ipcp_hisaddr, <<A, B, C, D>>}, {accept_remote, false}|Opts]};
 
+process_gen_attrs({#attribute{id = ?Framed_IP_Netmask}, Network = {_, _, _, _}}, {Verdict, Opts}) ->
+    {Verdict, append_accounting_opt({'Framed-IP-Netmask', Network}, Opts)};
+
 %% Alc-Primary-Dns
 process_gen_attrs({#attribute{id = ?Alc_Primary_Dns}, DNS}, {Verdict, Opts}) ->
     {Verdict, set_addr(ms_dns, DNS, 1, Opts)};
