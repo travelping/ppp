@@ -621,12 +621,14 @@ do_accounting_start(#state{config = Config,
 		   Value -> Value
 	       end,
     {ok, NasId} = application:get_env(nas_identifier),
+    {ok, NasIP} = application:get_env(nas_ipaddr),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Start},
 	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
-	     {?NAS_Identifier, NasId}
+	     {?NAS_Identifier, NasId},
+	     {?NAS_IP_Address, NasIP}
 	     | accounting_attrs(Accounting, [])],
     Req = #radius_request{
 	     cmd = accreq,
@@ -649,12 +651,14 @@ do_accounting_interim(Now, State = #state{config = Config,
     io:format("HisAddr: ~p~n", [HisAddr]),
     Counter = transport_get_acc_counter(State, HisAddr),
     {ok, NasId} = application:get_env(nas_identifier),
+    {ok, NasIP} = application:get_env(nas_ipaddr),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Update},
 	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
 	     {?NAS_Identifier, NasId},
+	     {?NAS_IP_Address, NasIP},
 	     {?RSession_Time, round((Now - Start) / 10)}
 	     | Counter]
 	++ accounting_attrs(Accounting, []),
@@ -682,12 +686,14 @@ do_accounting_stop(Now, State = #state{config = Config,
 	     end,
     Counter = transport_get_acc_counter(State, HisAddr),
     {ok, NasId} = application:get_env(nas_identifier),
+    {ok, NasIP} = application:get_env(nas_ipaddr),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_Stop},
 	     {?User_Name, UserName},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
 	     {?NAS_Identifier, NasId},
+	     {?NAS_IP_Address, NasIP},
 	     {?RSession_Time, round((Now - Start0) / 10)}
 	     | Counter]
 	++ accounting_attrs(Accounting, []),
@@ -700,9 +706,11 @@ do_accounting_stop(Now, State = #state{config = Config,
 
 accounting_on() ->
     {ok, NasId} = application:get_env(nas_identifier),
+    {ok, NasIP} = application:get_env(nas_ipaddr),
     Attrs = [
 	     {?RStatus_Type, ?RStatus_Type_On},
-	     {?NAS_Identifier, NasId}],
+	     {?NAS_Identifier, NasId},
+	     {?NAS_IP_Address, NasIP}],
     Req = #radius_request{
 	     cmd = accreq,
 	     attrs = Attrs,

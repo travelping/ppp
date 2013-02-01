@@ -454,12 +454,14 @@ send_authentication_nak(Id, Msg, State) ->
 
 check_passwd(PeerId, Passwd, #state{accounting = Accounting}) ->
     {ok, NasId} = application:get_env(nas_identifier),
+    {ok, NasIP} = application:get_env(nas_ipaddr),
     Attrs = [
 	     {?User_Name, PeerId},
 	     {?User_Password , Passwd},
 	     {?Service_Type, 2},
 	     {?Framed_Protocol, 1},
-	     {?NAS_Identifier, NasId}
+	     {?NAS_Identifier, NasId},
+	     {?NAS_IP_Address, NasIP}
 	     | ppp_link:accounting_attrs(Accounting, [])],
     Req = #radius_request{
 	     cmd = request,
