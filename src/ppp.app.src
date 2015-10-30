@@ -8,7 +8,6 @@
                   stdlib,
                   sasl,
 		  regine,
-		  flower,
 		  eradius
                  ]},
   {mod, { ppp_app, []}},
