@@ -1,5 +1,0 @@
-pppd needs to be installed, then
-compile and run as root with:
-
-   ppp_pppd:start_link(client).
-

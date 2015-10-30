@@ -1,0 +1,12 @@
+sudo: false
+
+language: erlang
+
+otp_release:
+   - 18.0
+   - 18.1
+
+script:
+  - rebar -C rebar.config.travis get-deps
+  - rebar -C rebar.config.travis compile
+  - rebar -C rebar.config.travis -v skip_deps=true ct
