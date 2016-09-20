@@ -348,12 +348,12 @@ decode_pap(<<MsgLength:8/integer, Rest/binary>>, Id, Code)
     {pap, pap_code(Code), Id, Msg}.
 
 decode_chap(Msg, Id, Code)
-  when Code == 'CHAP-Success';
-       Code == 'CHAP-Failure' ->
+  when Code == ?'CHAP-Success';
+       Code == ?'CHAP-Failure' ->
      {chap, chap_code(Code), Id, Msg};
 decode_chap(<<ValueSize:8/integer, Rest/binary>>, Id, Code)
-  when Code == 'CHAP-Challenge';
-       Code == 'CHAP-Response' ->
+  when Code == ?'CHAP-Challenge';
+       Code == ?'CHAP-Response' ->
     <<Value:ValueSize/bytes, Name/binary>> = Rest,
     {chap, chap_code(Code), Id, Value, Name}.
 
