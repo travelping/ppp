@@ -484,5 +484,5 @@ iface_magic(IFaceId, _) ->
     IFaceId.
 
 new_magic() ->
-    <<A:6, _:1, B:57>> = crypto:rand_bytes(8),
+    <<A:6, _:1, B:57>> = crypto:strong_rand_bytes(8),
     <<A:6, 0:1, B:57>>.
