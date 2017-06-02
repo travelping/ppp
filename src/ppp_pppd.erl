@@ -86,7 +86,7 @@ handle_call({send, Packet}, _From, State = #state{port = Port}) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_cast(Msg, State) ->
-    io:format("pppd Cast: ~p~n", [Msg]),
+    lager:debug("pppd Cast: ~p", [Msg]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -100,17 +100,17 @@ handle_cast(Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_info({Port, {data, Data}}, State = #state{port = Port, connection = Connection}) ->
-    io:format("pppd Data: ~p~n", [Data]),
+    lager:debug("pppd Data: ~p", [Data]),
     HDLC = ppp_hdlc:decapsulate(Data),
     lists:foreach(fun({_Address, _Control, PPP}) -> ppp_link:packet_in(Connection, PPP) end, HDLC),
     {noreply, State};
 
 handle_info({Port, {exit_status, Status}}, State = #state{port = Port}) ->
-    io:format("pppd existed with: ~p~n", [Status]),
+    lager:debug("pppd existed with: ~p", [Status]),
     {stop, normal, State};
 
 handle_info(Info, State) ->
-    io:format("pppd Info: ~p~n", [Info]),
+    lager:debug("pppd Info: ~p", [Info]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -125,7 +125,7 @@ handle_info(Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
-    io:format("ppp_pppd ~p terminated~n", [self()]),
+    lager:debug("ppp_pppd ~p terminated", [self()]),
     ok.
 
 %%--------------------------------------------------------------------

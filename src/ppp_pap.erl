@@ -130,13 +130,13 @@ handle_call(Event, _From, State)
     {reply, ok, NewState1};
 
 handle_call(Frame = {pap, 'PAP-Authentication-Request', _, _, _}, _From, State) ->
-    io:format("~p(~p): got ~p~n", [?MODULE, ?LINE, Frame]),
+    lager:debug("~p(~p): got ~p", [?MODULE, ?LINE, Frame]),
     fsm_server_call(Frame, State);
 
 handle_call(Frame = {pap, Code, _, _}, _From, State)
   when Code == 'PAP-Authenticate-Ack';
        Code == 'PAP-Authenticate-Nak'->
-    io:format("~p(~p): got ~p~n", [?MODULE, ?LINE, Frame]),
+    lager:debug("~p(~p): got ~p", [?MODULE, ?LINE, Frame]),
     fsm_client_call(Frame, State);
 
 handle_call(auth_peer, _From, State) ->
@@ -157,7 +157,7 @@ handle_call(protrej, _From, State) ->
     {reply, ok, NewState3};
 
 handle_call(Event, _From, State) ->
-    io:format("~p(~p): got ~p~n", [?MODULE, ?LINE, Event]),
+    lager:debug("~p(~p): got ~p", [?MODULE, ?LINE, Event]),
     {_, NewState0} = fsm_client_call(Event, State),
     {_, NewState1} = fsm_server_call(Event, NewState0),
     {reply, ok, NewState1}.
@@ -176,11 +176,11 @@ handle_info({timeout, TimerRef, timeout}, State = #state{s_timer = TimerRef}) ->
     fsm_server_cast(timeout, NewState);
 
 handle_info({'EXIT', Link, _Reason}, State = #state{link = Link}) ->
-    io:format("~s: Link ~p terminated~n", [?MODULE, Link]),
+    lager:debug("~s: Link ~p terminated", [?MODULE, Link]),
     {stop, normal, State};
 
 handle_info(Info, State) ->
-    io:format("~s: got info: ~p~n", [?MODULE, Info]),
+    lager:debug("~s: got info: ~p", [?MODULE, Info]),
     {noreply, State}.
 	
 terminate(_Reason, _State) ->
@@ -253,12 +253,12 @@ c_authreq(timeout, State) ->
     {reply, ok, c_authreq, NewState};
 
 c_authreq({pap, 'PAP-Authenticate-Ack', _Id, Msg}, State) ->
-    io:format("PAP: ~p~n", [Msg]),
+    lager:debug("PAP: ~p", [Msg]),
     {reply, {auth_withpeer, success}, c_open, State};
 
 c_authreq({pap, 'PAP-Authenticate-Nak', _Id, Msg}, State) ->
     %% error("PAP authentication failed");
-    io:format("PAP: ~p~n", [Msg]),
+    lager:debug("PAP: ~p", [Msg]),
     {reply, {auth_withpeer, fail}, c_badauth, State};
 
 c_authreq(_Msg, State) ->
@@ -377,7 +377,7 @@ fsm_client_cast(Msg, State = #state{c_state = StateName}) ->
     fsm_cast_reply(#state.c_state, ?MODULE:StateName(Msg, State)).
 
 fsm_call_reply(Element, {reply, Reply, NextStateName, NewStateData}) ->
-    io:format("new state ~p~n", [NextStateName]),
+    lager:debug("new state ~p", [NextStateName]),
     {reply, Reply, setelement(Element, NewStateData, NextStateName)};
 
 %% TODO: do we allow stop?
@@ -385,11 +385,11 @@ fsm_call_reply(_Element, {stop, Reason, NewStateData}) ->
     {stop, Reason, NewStateData}.
 			 
 fsm_server_call(Msg, State = #state{s_state = StateName}) ->
-    io:format("server_call in ~p~n", [StateName]),
+    lager:debug("server_call in ~p", [StateName]),
     fsm_call_reply(#state.s_state, ?MODULE:StateName(Msg, State)).
 
 fsm_client_call(Msg, State = #state{c_state = StateName}) ->
-    io:format("client_call in ~p~n", [StateName]),
+    lager:debug("client_call in ~p", [StateName]),
     fsm_call_reply(#state.c_state, ?MODULE:StateName(Msg, State)).
 
 %%===================================================================
@@ -424,7 +424,7 @@ link_send(Link, Data) ->
     ppp_link:send(Link, Data).
 
 send_packet(Packet, State = #state{link = Link}) ->
-    io:format("PAP Sending: ~p~n", [Packet]),
+    lager:debug("PAP Sending: ~p", [Packet]),
     Data = ppp_frame:encode(Packet),
     link_send(Link, Data),
     State.
@@ -477,11 +477,11 @@ check_passwd(PeerId, Passwd, #state{accounting = Accounting}) ->
 radius_response({ok, Response}, {_, _, Secret}) ->
     radius_reply(eradius_lib:decode_request(Response, Secret));
 radius_response(Response, _) ->
-    io:format("RADIUS failed with ~p~n", [Response]),
+    lager:debug("RADIUS failed with ~p", [Response]),
     fail.
 
 radius_reply(#radius_request{cmd = accept} = Reply) ->
-    io:format("RADIUS Reply: ~p~n", [Reply]),
+    lager:debug("RADIUS Reply: ~p", [Reply]),
     case process_radius_attrs(fun process_pap_attrs/2, success, Reply) of
 	{success, _} = Result ->
 	    Result;
@@ -489,10 +489,10 @@ radius_reply(#radius_request{cmd = accept} = Reply) ->
 	    fail
     end;
 radius_reply(#radius_request{cmd = reject} = Reply) ->
-    io:format("RADIUS failed with ~p~n", [Reply]),
+    lager:debug("RADIUS failed with ~p", [Reply]),
     fail;
 radius_reply(Reply) ->
-    io:format("RADIUS failed with ~p~n", [Reply]),
+    lager:debug("RADIUS failed with ~p", [Reply]),
     fail.
 
 %% iterate over the RADIUS attributes
@@ -553,15 +553,15 @@ process_gen_attrs({#attribute{id = ?Alc_Secondary_Dns}, DNS}, {Verdict, Opts}) -
     {Verdict, set_addr(ms_dns, DNS, 2, Opts)};
 
 process_gen_attrs({#attribute{name = Name}, Value} , {_Verdict, _Opts} = Acc0) ->
-    io:format("unhandled reply AVP: ~s: ~p~n", [Name, Value]),
+    lager:debug("unhandled reply AVP: ~s: ~p", [Name, Value]),
     Acc0;
 
 process_gen_attrs({Attr, Value} , {_Verdict, _Opts} = Acc0) ->
-    io:format("unhandled undecoded reply AVP: ~w: ~p~n", [Attr, Value]),
+    lager:debug("unhandled undecoded reply AVP: ~w: ~p", [Attr, Value]),
     Acc0.
 
 process_unexpected_value({#attribute{name = Name}, Value} , {_Verdict, Opts}) ->
-    io:format("unexpected Value in AVP: ~s: ~p~n", [Name, Value]),
+    lager:debug("unexpected Value in AVP: ~s: ~p", [Name, Value]),
     {fail, Opts}.
 
 ip2bin({A,B,C,D}) ->

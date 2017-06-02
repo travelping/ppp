@@ -161,7 +161,7 @@ reqci(_StateName, Options, RejectIfDisagree,
     {{Verdict, ReplyOpts1}, NewState}.
 
 up(State) ->
-    io:format("~p: Up~n", [?MODULE]),
+    lager:debug("~p: Up", [?MODULE]),
     up_validate_neg_ifaceid(State).
 
 up_validate_neg_ifaceid(State = #state{
@@ -194,19 +194,19 @@ up_validate_neg_ifaceid(State = #state{
     end.
 
 down(State) ->
-    io:format("~p: Down~n", [?MODULE]),
+    lager:debug("~p: Down", [?MODULE]),
     %% Disable IPCP Echos
     %% Set Link Down
     {down, State}.
 
 starting(State) ->
-    io:format("~p: Starting~n", [?MODULE]),
+    lager:debug("~p: Starting", [?MODULE]),
     %%link_required(f->unit);
     {starting, State}.
 
 
 finished(State) ->
-    io:format("~p: Finished~n", [?MODULE]),
+    lager:debug("~p: Finished", [?MODULE]),
     %% link_terminated(f->unit);
     {terminated, State}.
 
@@ -295,14 +295,14 @@ ipv6cp_nakci(_, _, _, _, _) ->
 %% Note: on generating Ack/Naks we do preserve ordering!
 %%
 ipv6cp_nakcis([], _TreatAsReject, _, TryOpts, _) ->
-    io:format("ipv6cp_nakcis: ~p~n", [TryOpts]),
+    lager:debug("ipv6cp_nakcis: ~p", [TryOpts]),
     TryOpts;
 ipv6cp_nakcis([Opt|Options], TreatAsReject, GotOpts, TryOpts, NakOpts) ->
     case ipv6cp_nakci(Opt, TreatAsReject, GotOpts, TryOpts, NakOpts) of
 	{NewTryOpts, NewNakOpts} ->
 	    ipv6cp_nakcis(Options, TreatAsReject, GotOpts, NewTryOpts, NewNakOpts);
 	_ ->
-	    io:format("ipv6cp_nakcis: received bad Nakt!~n"),
+	    lager:debug("ipv6cp_nakcis: received bad Nakt!"),
 	    false
     end.
 
@@ -335,7 +335,7 @@ ipv6cp_rejcis([RejOpt|RejOpts], GotOpts, TryOpts) ->
 	NewTryOpts when is_record(NewTryOpts, ipv6cp_opts) ->
 	    ipv6cp_rejcis(RejOpts, GotOpts, NewTryOpts);
 	_ ->
-	    io:format("ipv6cp_rejcis: received bad Reject!~n"),
+	    lager:debug("ipv6cp_rejcis: received bad Reject!"),
 	    false
     end.
 
@@ -349,7 +349,7 @@ ipv6cp_ackci({ifaceid, OurId}, #ipv6cp_opts{neg_ifaceid = true, ourid = OurId}) 
     true;
 
 ipv6cp_ackci(Ack, _) ->
-    io:format("invalid Ack: ~p~n", [Ack]),
+    lager:debug("invalid Ack: ~p", [Ack]),
     false.
 
 %%TODO: does this really matter?
@@ -365,7 +365,7 @@ ipv6cp_ackcis([], _) ->
 ipv6cp_ackcis([AckOpt|AckOpts], GotOpts) ->
     case ipv6cp_ackci(AckOpt, GotOpts) of
 	false ->
-	    io:format("ipv6cp_ackcis: received bad Ack! ~p, ~p~n", [AckOpt, GotOpts]),
+	    lager:debug("ipv6cp_ackcis: received bad Ack! ~p, ~p", [AckOpt, GotOpts]),
 	    false;
 	_ ->
 	    ipv6cp_ackcis(AckOpts, GotOpts)
@@ -425,8 +425,8 @@ ipv6cp_reqci({ifaceid, ReqHisId}, #ipv6cp_opts{neg_ifaceid = true}, WantOpts, Go
     {Verdict, GotOptsNew , HisOptsNew};
 
 ipv6cp_reqci(Req, _, _WantOpts, GotOpts, HisOpts) ->
-    io:format("lcp_reqci: rejecting: ~p~n", [Req]),
-    io:format("His: ~p~n", [HisOpts]),
+    lager:debug("lcp_reqci: rejecting: ~p", [Req]),
+    lager:debug("His: ~p", [HisOpts]),
     {rej, GotOpts, HisOpts}.
 
 process_reqcis(Options, RejectIfDisagree, AllowedOpts, WantOpts, GotOpts) ->

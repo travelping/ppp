@@ -23,7 +23,7 @@ decapsulate_frames([HDLCData|Rest], Acc) ->
 	    R = {Address, Control, PayLoad},
 	    decapsulate_frames(Rest, [R|Acc]);
 	MyCRC ->
-	    io:format("invalid HDLC CRC, wanted ~.16.0B, got ~.16.0B~n", [MyCRC, CRC]),
+	    lager:debug("invalid HDLC CRC, wanted ~.16.0B, got ~.16.0B", [MyCRC, CRC]),
 	    decapsulate_frames(Rest, Acc)
     end.
 

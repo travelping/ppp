@@ -193,7 +193,7 @@ reqci(_StateName, Options, RejectIfDisagree,
     {{Verdict, ReplyOpts1}, NewState}.
 
 up(State) ->
-    io:format("~p: Up~n", [?MODULE]),
+    lager:debug("~p: Up", [?MODULE]),
     up_validate_neg_addr(State).
 
 up_validate_neg_addr(State = #state{
@@ -248,19 +248,19 @@ up_validate_dns(State = #state{
     {Reply, NewState}.
 
 down(State) ->
-    io:format("~p: Down~n", [?MODULE]),
+    lager:debug("~p: Down", [?MODULE]),
     %% Disable IPCP Echos
     %% Set Link Down
     {down, State}.
 
 starting(State) ->
-    io:format("~p: Starting~n", [?MODULE]),
+    lager:debug("~p: Starting", [?MODULE]),
     %%link_required(f->unit);
     {starting, State}.
 
 
 finished(State) ->
-    io:format("~p: Finished~n", [?MODULE]),
+    lager:debug("~p: Finished", [?MODULE]),
     %% link_terminated(f->unit);
     {terminated, State}.
 
@@ -399,14 +399,14 @@ ipcp_nakci(_, _, _, _, _) ->
 %% Note: on generating Ack/Naks we do preserve ordering!
 %%
 ipcp_nakcis([], _TreatAsReject, _, TryOpts, _) ->
-    io:format("ipcp_nakcis: ~p~n", [TryOpts]),
+    lager:debug("ipcp_nakcis: ~p", [TryOpts]),
     TryOpts;
 ipcp_nakcis([Opt|Options], TreatAsReject, GotOpts, TryOpts, NakOpts) ->
     case ipcp_nakci(Opt, TreatAsReject, GotOpts, TryOpts, NakOpts) of
 	{NewTryOpts, NewNakOpts} ->
 	    ipcp_nakcis(Options, TreatAsReject, GotOpts, NewTryOpts, NewNakOpts);
 	_ ->
-	    io:format("ipcp_nakcis: received bad Nakt!~n"),
+	    lager:debug("ipcp_nakcis: received bad Nakt!"),
 	    false
     end.
 
@@ -453,7 +453,7 @@ ipcp_rejcis([RejOpt|RejOpts], GotOpts, TryOpts) ->
 	NewTryOpts when is_record(NewTryOpts, ipcp_opts) ->
 	    ipcp_rejcis(RejOpts, GotOpts, NewTryOpts);
 	_ ->
-	    io:format("ipcp_rejcis: received bad Reject!~n"),
+	    lager:debug("ipcp_rejcis: received bad Reject!"),
 	    false
     end.
 
@@ -479,7 +479,7 @@ ipcp_ackci({ms_dns2, AckDnsAddr}, #ipcp_opts{req_dns2 = GotIt, dnsaddr2 = GotDns
     GotIt and (AckDnsAddr == GotDnsAddr);
 
 ipcp_ackci(Ack, _) ->
-    io:format("invalid Ack: ~p~n", [Ack]),
+    lager:debug("invalid Ack: ~p", [Ack]),
     false.
 
 %%TODO: does this really matter?
@@ -495,7 +495,7 @@ ipcp_ackcis([], _) ->
 ipcp_ackcis([AckOpt|AckOpts], GotOpts) ->
     case ipcp_ackci(AckOpt, GotOpts) of
 	false ->
-	    io:format("ipcp_ackcis: received bad Ack! ~p, ~p~n", [AckOpt, GotOpts]),
+	    lager:debug("ipcp_ackcis: received bad Ack! ~p, ~p", [AckOpt, GotOpts]),
 	    false;
 	_ ->
 	    ipcp_ackcis(AckOpts, GotOpts)
@@ -589,8 +589,8 @@ ipcp_reqci({ms_wins2, ReqWinsAddr}, #ipcp_opts{winsaddr2 = AllowedWinsAddr}, Wan
     {Verdict, WantOpts, HisOpts};
 
 ipcp_reqci(Req, _, WantOpts, HisOpts) ->
-    io:format("lcp_reqci: rejecting: ~p~n", [Req]),
-    io:format("His: ~p~n", [HisOpts]),
+    lager:debug("lcp_reqci: rejecting: ~p", [Req]),
+    lager:debug("His: ~p", [HisOpts]),
     {rej, WantOpts, HisOpts}.
 
 process_reqcis(Options, RejectIfDisagree, AllowedOpts, WantOpts) ->

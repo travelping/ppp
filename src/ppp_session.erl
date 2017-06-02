@@ -26,7 +26,7 @@ start_link() ->
 
 new(HandlerMod, HandlerPid, HandlerInfo, PeerId, SessionId, PPPConfig) ->
     {ok, Session} = ppp_link_sup:new(HandlerMod, HandlerPid, HandlerInfo, PPPConfig),
-    io:format("new Session: ~p, ~p~n", [SessionId, Session]),
+    lager:debug("new Session: ~p, ~p", [SessionId, Session]),
     regine_server:register(?SERVER, Session, PeerId, {PeerId, SessionId}),
     {ok, Session}.
 
@@ -34,7 +34,7 @@ lookup(PeerId, SessionId) ->
     lookup({PeerId, SessionId}).
 
 lookup(SessionId) ->
-    io:format("session lookup: ~p~n", [ets:lookup(?SERVER, SessionId)]),
+    lager:debug("session lookup: ~p", [ets:lookup(?SERVER, SessionId)]),
     case ets:lookup(?SERVER, SessionId) of
 	[] ->
 	    false;

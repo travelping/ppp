@@ -950,7 +950,7 @@ opened(Event, _From, State) ->
 %% let the protocol module hook them
 
 handler_lower_event(Event, {From, StateName, State}, ProtoState) ->
-    io:format("lower ~p in ~p~n", [Event, StateName]),
+    lager:debug("lower ~p in ~p", [Event, StateName]),
     NewState = State#state{protocol_state = ProtoState},
     ?MODULE:StateName(Event, From, NewState).
 
@@ -975,14 +975,14 @@ handler_lower_event(Event, {From, StateName, State}, ProtoState) ->
 			     Code == 'CP-Reset-Reply')).
 
 handle_event(Event, StateName, State) ->
-    io:format("Event: ~p~n", [Event]),
+    lager:debug("Event: ~p", [Event]),
     next_state(StateName, State).
 
 handle_sync_event(Msg = {Protocol, 'CP-Configure-Ack', Id, Options},
 	     From, StateName, State = #state{protocol = Protocol}) ->
     case handle_configure_ack(StateName, Id, Options, State) of
 	false ->
-	    io:format("Ignoring ~p in state ~p~n", [Msg, StateName]),
+	    lager:debug("Ignoring ~p in state ~p", [Msg, StateName]),
 	    reply(ok, StateName, State);
 	NewState ->
 	    ?MODULE:StateName(Msg, From, NewState)
@@ -992,7 +992,7 @@ handle_sync_event(Msg = {Protocol, 'CP-Configure-Nak', Id, Options},
 	     From, StateName, State = #state{protocol = Protocol}) ->
     case handle_configure_nak(StateName, Id, Options, State) of
 	false ->
-	    io:format("Ignoring ~p in state ~p~n", [Msg, StateName]),
+	    lager:debug("Ignoring ~p in state ~p", [Msg, StateName]),
 	    reply(ok, StateName, State);
 	NewState ->
 	    ?MODULE:StateName(Msg, From, NewState)
@@ -1002,7 +1002,7 @@ handle_sync_event(Msg = {Protocol, 'CP-Configure-Reject', Id, Options},
 	     From, StateName, State = #state{protocol = Protocol}) ->
     case handle_configure_rej(StateName, Id, Options, State) of
 	false ->
-	    io:format("Ignoring ~p in state ~p~n", [Msg, StateName]),
+	    lager:debug("Ignoring ~p in state ~p", [Msg, StateName]),
 	    reply(ok, StateName, State);
 	NewState ->
 	    ?MODULE:StateName(Msg, From, NewState)
@@ -1021,20 +1021,20 @@ handle_sync_event({lower, Event}, From, StateName, State) ->
     lower_event(Event, From, StateName, State);
 
 handle_sync_event(Event, _From, StateName, State) ->
-    io:format("SyncEvent: ~p~n", [Event]),
+    lager:debug("SyncEvent: ~p", [Event]),
     Reply = ok,
     reply(Reply, StateName, State).
 
 handle_info({'EXIT', Link, _Reason}, _StateName, State = #state{link = Link}) ->
-    io:format("Link ~p terminated~n", [Link]),
+    lager:debug("Link ~p terminated", [Link]),
     {stop, normal, State};
 
 handle_info(Info, StateName, State) ->
-    io:format("~s: in state ~s, got info: ~p~n", [?MODULE, StateName, Info]),
+    lager:debug("~s: in state ~s, got info: ~p", [?MODULE, StateName, Info]),
     next_state(StateName, State).
 
 terminate(_Reason, _StateName, State) ->
-    io:format("~s for ~s (~p) terminated~n", [?MODULE, State#state.protocol, self()]),
+    lager:debug("~s for ~s (~p) terminated", [?MODULE, State#state.protocol, self()]),
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->
@@ -1160,16 +1160,16 @@ link_send(Link, Data) ->
     ppp_link:send(Link, Data).
 
 send_packet(Packet, State = #state{link = Link}) ->
-    io:format("Sending: ~p~n", [Packet]),
+    lager:debug("Sending: ~p", [Packet]),
     Data = ppp_frame:encode(Packet),
     link_send(Link, Data),
     State.
 
 ignore_frame_in(StateName, Frame) ->
-    io:format("ignoring ~p ~p in state ~p (~p)~n", [element(1, Frame), element(2, Frame), StateName, Frame]).
+    lager:debug("ignoring ~p ~p in state ~p (~p)", [element(1, Frame), element(2, Frame), StateName, Frame]).
 
 invalid_event(StateName, Event) ->
-    io:format("invalid event ~p in state ~p~n", [Event, StateName]).
+    lager:debug("invalid event ~p in state ~p", [Event, StateName]).
 
 -spec get_counter('Terminate-Ack' | 'Terminate-Request' | 'Configure-Request' | 'Configure-Nak', #state{}) -> integer().
 get_counter('Terminate-Ack', _State) ->
@@ -1207,7 +1207,7 @@ state_transitions(_NewStateName, State) ->
     State.
 
 reply(Reply, NextStateName, State) ->
-    io:format("FSM ~p: going to: ~p~n", [State#state.protocol, NextStateName]),
+    lager:debug("FSM ~p: going to: ~p", [State#state.protocol, NextStateName]),
     NewState = state_transitions(NextStateName, State),
     case NextStateName of
 	opened ->
@@ -1218,7 +1218,7 @@ reply(Reply, NextStateName, State) ->
     end.
 
 next_state(NextStateName, State) ->
-    io:format("FSM ~p: going to: ~p~n", [State#state.protocol, NextStateName]),
+    lager:debug("FSM ~p: going to: ~p", [State#state.protocol, NextStateName]),
     NewState = state_transitions(NextStateName, State),
     case NextStateName of
 	opened ->
@@ -1254,7 +1254,7 @@ handle_configure_nak(StateName, Id, Options, State = #state{reqid = Id}) ->
 
 handle_configure_nak(_, Id, _, _) ->
     %% invalid Id -> toss...
-    io:format("Invalid Id: ~p~n", [Id]),
+    lager:debug("Invalid Id: ~p", [Id]),
     false.
 
 handle_configure_rej(StateName, Id, Options, State = #state{reqid = Id}) ->
