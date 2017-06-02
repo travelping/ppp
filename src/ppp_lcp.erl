@@ -260,7 +260,7 @@ init(Link, Config) ->
 				     }}.
 
 resetci(State = #state{want_opts = WantOpts}) ->
-    WantOpts1 = WantOpts#lcp_opts{magicnumber = random:uniform(16#ffffffff)},
+    WantOpts1 = WantOpts#lcp_opts{magicnumber = rand:uniform(16#ffffffff)},
     NewState = State#state{want_opts = WantOpts1, got_opts = WantOpts1},
     auth_reset(NewState).
 
@@ -563,7 +563,7 @@ lcp_nakci({callback, ?CBCP_OPT}, #lcp_opts{neg_cbcp = true}, _WantOpts, TryOpts,
     {T1, N1};
 
 lcp_nakci({magic, _}, #lcp_opts{neg_magicnumber = true}, _WantOpts, TryOpts, NakOpts) ->
-    T1 = TryOpts#lcp_opts{magicnumber = random:uniform(16#ffffffff)},
+    T1 = TryOpts#lcp_opts{magicnumber = rand:uniform(16#ffffffff)},
     N1 = NakOpts#lcp_opts{neg_magicnumber = true},
     {T1, N1};
 
@@ -853,7 +853,7 @@ lcp_reqci({magic, ReqMagic},
   when AllowedNeg == true; GotNeg == true ->
     if
 	GotNeg andalso ReqMagic == GotMagic ->
-	    Verdict = {rej, {magic, random:uniform(16#ffffffff)}},
+	    Verdict = {rej, {magic, rand:uniform(16#ffffffff)}},
 	    HisOptsNew = HisOpts;
 	true ->
 	    Verdict = ack,
