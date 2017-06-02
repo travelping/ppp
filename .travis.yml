@@ -3,10 +3,16 @@ sudo: false
 language: erlang
 
 otp_release:
-   - 18.0
-   - 18.1
+ - 19.1
+ - 19.2
+ - 19.3
+
+install: "true"
+
+before_install:
+  - wget https://s3.amazonaws.com/rebar3/rebar3
+  - chmod u+x ./rebar3
 
 script:
-  - rebar -C rebar.config.travis get-deps
-  - rebar -C rebar.config.travis compile
-  - rebar -C rebar.config.travis -v skip_deps=true ct
+  - ./rebar3 compile
+  - ./rebar3 do xref, ct, coveralls send
