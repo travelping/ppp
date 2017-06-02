@@ -733,8 +733,7 @@ accounting_on() ->
 
 %% get time with 100ms +/50ms presision
 now_ticks() ->
-    {MegaSecs, Secs, MicroSecs} = erlang:now(),
-    MegaSecs * 10000000 + Secs * 10 + round(MicroSecs div 100000).
+    round(erlang:system_time(milli_seconds) / 100).
 
 cancel_timer(undefined) ->
     ok;
