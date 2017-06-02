@@ -441,8 +441,8 @@ lcp_close(Msg, State = #state{lcp = LCP}) ->
     {next_state, terminating, State}.
 
 %% Network Phase Finished
-phase_finished(network, State) ->
-    lcp_close(<<"No network protocols running">>, State).
+%% phase_finished(network, State) ->
+%%     lcp_close(<<"No network protocols running">>, State).
 
 %% Network Phase Open
 phase_open(network, State = #state{config = Config}) ->
