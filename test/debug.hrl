@@ -1,7 +1,7 @@
 -ifdef(debug).
 
 -define(DEBUG(FORMAT, DATA),
-        io:format("~w(~B): " ++ (FORMAT), [?MODULE, ?LINE | DATA])).
+        ct:pal("~w(~B): " ++ (FORMAT), [?MODULE, ?LINE | DATA])).
 -define(DEBUG(FORMAT), ?DEBUG(FORMAT, [])).
 
 -else.
