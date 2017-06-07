@@ -8,7 +8,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/2]).
+-export([start_link/3]).
 -export([frame_in/2, lowerup/1, lowerdown/1, loweropen/1, lowerclose/2, protrej/1]).
 -export([auth_peer/1, auth_withpeer/3]).
 
@@ -21,11 +21,6 @@
 -export([s_initial/2, s_closed/2, s_pending/2, s_listen/2, s_open/2, s_badauth/2]).
 
 -define(SERVER, ?MODULE). 
-
--include_lib("eradius/include/eradius_lib.hrl").
--include_lib("eradius/include/eradius_dict.hrl").
--include_lib("eradius/include/dictionary.hrl").
--include_lib("eradius/include/dictionary_alcatel_sr.hrl").
 
 %% Client states.
 -type client_state() ::
@@ -50,7 +45,7 @@
 
 -record(state, {
 	  link			:: pid(),
-	  
+
 	  c_state = c_initial	:: client_state(),
 	  c_timer		:: undefined | reference(),
 	  s_state = s_initial	:: server_state(),
@@ -66,15 +61,15 @@
 	  maxtransmits = 0	:: integer(),		%% Maximum number of auth-reqs to send
 	  reqtimeout = 0	:: integer(),		%% Time to wait for auth-req from peer
 
-	  accounting = []	:: list()		%% List of Accounting Attributes for RADIUS
+	  session = undefined	:: ergw_aaa:session()	%% erGW-AAA session
 	 }).
 
 %%%===================================================================
 %%% Protocol API
 %%%===================================================================
 
-start_link(Link, Config) ->
-    gen_server:start_link(?MODULE, [Link, Config], []).
+start_link(Link, Session, Config) ->
+    gen_server:start_link(?MODULE, [Link, Session, Config], []).
 
 lowerup(FSM) ->
     gen_server:call(FSM, lowerup).
@@ -110,7 +105,7 @@ auth_withpeer(FSM, UserName, Password) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Link, Config]) ->
+init([Link, Session, Config]) ->
     process_flag(trap_exit, true),
 
     State = #state{
@@ -118,7 +113,7 @@ init([Link, Config]) ->
       timeouttime = proplists:get_value('pap-restart', Config, ?DEFTIMEOUT),
       maxtransmits = proplists:get_value('pap-max-authreq', Config, 10),
       reqtimeout = proplists:get_value('pap-timeout', Config, ?DEFREQTIME),
-      accounting = proplists:get_value(accounting, Config, [])
+      session = Session
      },
 
     {ok, State}.
@@ -328,8 +323,9 @@ s_listen(timeout, State = #state{link = Link}) ->
 s_listen({pap, 'PAP-Authentication-Request', Id, PeerId, Passwd}, State) ->
     NewState0 = stop_s_timer(State),
     case check_passwd(PeerId, Passwd, State) of
-	{success, Opts} ->
+	success ->
 	    %% notice("PAP peer authentication succeeded for %q", rhostname);
+	    Opts = ppp_session_opts(State),
 	    NewState1 = send_authentication_ack(Id, <<"">>, NewState0),
 	    {reply, {auth_peer, success, PeerId, Opts}, s_open, NewState1};
 	_ ->
@@ -447,122 +443,31 @@ send_authentication_nak(Id, Msg, State) ->
     send_packet({pap, 'PAP-Authenticate-Nak', Id, Msg}, State).
 
 %%===================================================================
-%% Password Logic
-%%
-%% check_passwd(<<"test">>, <<"secret">>) ->
-%%     success;
-%% check_passwd(PeerId, PeerId) ->
-%%     success;
-%% check_passwd(_PeerId, _Passwd) ->
-%%     fail.
 
-check_passwd(PeerId, Passwd, #state{accounting = Accounting}) ->
-    {ok, NasId} = application:get_env(nas_identifier),
-    {ok, NasIP} = application:get_env(nas_ipaddr),
-    Attrs = [
-	     {?User_Name, PeerId},
-	     {?User_Password , Passwd},
-	     {?Service_Type, 2},
-	     {?Framed_Protocol, 1},
-	     {?NAS_Identifier, NasId},
-	     {?NAS_IP_Address, NasIP}
-	     | ppp_link:accounting_attrs(Accounting, [])],
-    Req = #radius_request{
-	     cmd = request,
-	     attrs = Attrs,
-	     msg_hmac = true},
-    {ok, NAS} = application:get_env(radius_auth_server),
-    radius_response(eradius_client:send_request(NAS, Req), NAS).
+check_passwd(PeerId, Passwd, #state{session = Session}) ->
+    AuthOpts = #{'Username' => PeerId,
+		 'Password' => Passwd},
+    ergw_aaa_session:authenticate(Session, AuthOpts).
 
-radius_response({ok, Response}, {_, _, Secret}) ->
-    radius_reply(eradius_lib:decode_request(Response, Secret));
-radius_response(Response, _) ->
-    lager:debug("RADIUS failed with ~p", [Response]),
-    fail.
-
-radius_reply(#radius_request{cmd = accept} = Reply) ->
-    lager:debug("RADIUS Reply: ~p", [Reply]),
-    case process_radius_attrs(fun process_pap_attrs/2, success, Reply) of
-	{success, _} = Result ->
-	    Result;
-	_ ->
-	    fail
-    end;
-radius_reply(#radius_request{cmd = reject} = Reply) ->
-    lager:debug("RADIUS failed with ~p", [Reply]),
-    fail;
-radius_reply(Reply) ->
-    lager:debug("RADIUS failed with ~p", [Reply]),
-    fail.
-
-%% iterate over the RADIUS attributes
-process_radius_attrs(Fun, Verdict, #radius_request{attrs = Attrs}) ->
-    lists:foldr(Fun, {Verdict, []}, Attrs).
-
-process_pap_attrs(AVP, {_Verdict, _Opts} = Acc0) ->
-    process_gen_attrs(AVP, Acc0).
-
-append_accounting_opt(Opt, Opts) ->
-    Accounting = proplists:get_value(accounting, Opts, []),
-    lists:keystore(accounting, 1, Opts, {accounting, [Opt|Accounting]}).
-
-%% Class
-process_gen_attrs({#attribute{id = ?Class}, Class}, {Verdict, Opts}) ->
-    {Verdict, append_accounting_opt({class, Class}, Opts)};
-%% User-Name
-process_gen_attrs({#attribute{id = ?User_Name}, UserName}, {Verdict, Opts}) ->
-    {Verdict, append_accounting_opt({username, UserName}, Opts)};
-
-process_gen_attrs({#attribute{id = ?Acct_Interim_Interval}, InterimAccounting}, {Verdict, Opts}) ->
-    {Verdict, [{interim_accounting, InterimAccounting}|Opts]};
-
-%% Session-Timeout
-process_gen_attrs({#attribute{id = ?Session_Timeout}, TimeOut}, {Verdict, Opts}) ->
-    {Verdict, [{session_timeout, TimeOut}|Opts]};
-
-%% Service-Type = Framed-User
-process_gen_attrs({#attribute{id = ?Service_Type}, 2}, {_Verdict, _Opts} = Acc0) ->
-    Acc0;
-process_gen_attrs(AVP = {#attribute{id = ?Service_Type}, _}, Acc0) ->
-    process_unexpected_value(AVP, Acc0);
-
-%% Framed-Protocol = PPP
-process_gen_attrs({#attribute{id = ?Framed_Protocol}, 1}, {_Verdict, _Opts} = Acc0) ->
-    Acc0;
-process_gen_attrs(AVP = {#attribute{id = ?Framed_Protocol}, _}, Acc0) ->
-    process_unexpected_value(AVP, Acc0);
+ppp_session_opts(#state{session = Session}) ->
+    SessionOpts = ergw_aaa_session:get(Session),
+    maps:fold(fun to_ppp_opt/3, [], SessionOpts).
 
 %% Framed-IP-Address = xx.xx.xx.xx
-process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {255,255,255,255}}, {Verdict, Opts}) ->
+to_ppp_opt('Framed-IP-Address', {255,255,255,255}, Opts) ->
     %% user should be allowed to select one
-    {Verdict, [{ipcp_hisaddr, <<0,0,0,0>>}, {accept_remote, true}|Opts]};
-process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {255,255,255,254}}, {Verdict, Opts}) ->
+    [{ipcp_hisaddr, <<0,0,0,0>>}, {accept_remote, true}|Opts];
+to_ppp_opt('Framed-IP-Address', {255,255,255,254}, Opts) ->
     %% NAS should select an ip address
-    {Verdict, [{choose_ip, true}, {accept_remote, false}|Opts]};
-process_gen_attrs({#attribute{id = ?Framed_IP_Address}, {A, B, C, D}}, {Verdict, Opts}) ->
-    {Verdict, [{ipcp_hisaddr, <<A, B, C, D>>}, {accept_remote, false}|Opts]};
-
-process_gen_attrs({#attribute{id = ?Framed_IP_Netmask}, Network = {_, _, _, _}}, {Verdict, Opts}) ->
-    {Verdict, append_accounting_opt({'Framed-IP-Netmask', Network}, Opts)};
-
-%% Alc-Primary-Dns
-process_gen_attrs({#attribute{id = ?Alc_Primary_Dns}, DNS}, {Verdict, Opts}) ->
-    {Verdict, set_addr(ms_dns, DNS, 1, Opts)};
-%% Alc-Secondary-Dns
-process_gen_attrs({#attribute{id = ?Alc_Secondary_Dns}, DNS}, {Verdict, Opts}) ->
-    {Verdict, set_addr(ms_dns, DNS, 2, Opts)};
-
-process_gen_attrs({#attribute{name = Name}, Value} , {_Verdict, _Opts} = Acc0) ->
-    lager:debug("unhandled reply AVP: ~s: ~p", [Name, Value]),
-    Acc0;
-
-process_gen_attrs({Attr, Value} , {_Verdict, _Opts} = Acc0) ->
-    lager:debug("unhandled undecoded reply AVP: ~w: ~p", [Attr, Value]),
-    Acc0.
-
-process_unexpected_value({#attribute{name = Name}, Value} , {_Verdict, Opts}) ->
-    lager:debug("unexpected Value in AVP: ~s: ~p", [Name, Value]),
-    {fail, Opts}.
+    [{choose_ip, true}, {accept_remote, false}|Opts];
+to_ppp_opt('Framed-IP-Address', IP = {_,_,_,_}, Opts) ->
+    [{ipcp_hisaddr, ip2bin(IP)}, {accept_remote, false}|Opts];
+to_ppp_opt('MS-Primary-DNS-Server', DNS, Opts) ->
+    set_addr(ms_dns, DNS, 1, Opts);
+to_ppp_opt('MS-Secondary-DNS-Server', DNS, Opts) ->
+    set_addr(ms_dns, DNS, 2, Opts);
+to_ppp_opt(_Key, _Value, Opts) ->
+    Opts.
 
 ip2bin({A,B,C,D}) ->
     <<A:8, B:8, C:8, D:8>>;

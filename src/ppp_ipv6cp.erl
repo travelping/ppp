@@ -8,7 +8,7 @@
 -behaviour(ppp_proto).
 
 %% API
--export([start_link/2]).
+-export([start_link/3]).
 -export([frame_in/2, lowerup/1, lowerdown/1, loweropen/1, lowerclose/2]).
 
 %% ppp_fsm callbacks
@@ -39,7 +39,7 @@
 %%% Protocol API
 %%%===================================================================
 
-start_link(Link, Config) ->
+start_link(Link, _Session, Config) ->
     ppp_fsm:start_link(Link, Config, ?MODULE).
 
 lowerup(FSM) ->

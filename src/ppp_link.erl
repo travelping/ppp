@@ -11,29 +11,25 @@
 -export([packet_in/2, send/2, link_down/1]).
 -export([layer_up/3, layer_down/3, layer_started/3, layer_finished/3]).
 -export([auth_withpeer/3, auth_peer/3]).
--export([accounting_on/0]).
-
-%% RADIUS helper
--export([accounting_attrs/2]).
 
 %% gen_fsm callbacks
 -export([init/1,
 	 establish/2, auth/2, network/2, terminating/2,
 	 handle_event/3, handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 
+-import(ergw_aaa_session, [to_session/1]).
+
 -include("ppp.hrl").
 -include("ppp_lcp.hrl").
 -include("ppp_ipcp.hrl").
 -include("ppp_ipv6cp.hrl").
--include_lib("eradius/include/eradius_lib.hrl").
--include_lib("eradius/include/dictionary.hrl").
--include_lib("eradius/include/dictionary_rfc4679.hrl").
 
 -define(SERVER, ?MODULE).
 -define(NETWORK_PROTOCOL_TIMEOUT, 5000).
 
 -record(state, {
 	  config		:: list(),         		%% config options proplist
+	  session		:: ergw_aaa:session(),		%% erGW-AAA session
 	  transport		:: pid(), 			%% Transport Layer
 	  transport_info	:: any(), 			%% Transport Layer Info
 	  lcp			:: pid(), 			%% LCP protocol driver
@@ -52,10 +48,8 @@
 
 	  our_lcp_opts		:: #lcp_opts{}, 		%% Options that peer ack'd
 	  his_lcp_opts		:: #lcp_opts{},			%% Options that we ack'd
-								%% Accounting data
-	  accounting_start	:: integer(),			%% Session Start Time in Ticks
-	  timeout_ref		:: reference(),			%% Session-Timeout Timer
-	  interim_ref		:: reference()			%% Interim-Accouting Timer
+
+	  accounting_started = false :: boolean			%% has Accounting been started yet?
 	 }).
 
 %%%===================================================================
@@ -99,13 +93,22 @@ start_link(TransportModule, TransportPid, TransportRef, Config) ->
 init([TransportInfo, TransportPid, Config]) ->
     process_flag(trap_exit, true),
 
+    {ok, NasIP} = application:get_env(nas_ipaddr),
+
+    SessionOpts = #{'Accouting-Update-Fun' => fun accounting_update/2,
+		    'Service-Type'         => 'Framed-User',
+		    'Framed-Protocol'      => 'PPP',
+		    'NAS-IP-Address'       => NasIP},
+    {ok, Session} = ergw_aaa_session_sup:new_session(self(), to_session(SessionOpts)),
+
     NPsRequired = ordsets:from_list([ipcp]),
 
-    {ok, LCP} = ppp_lcp:start_link(self(), Config),
-    {ok, PAP} = ppp_pap:start_link(self(), Config),
+    {ok, LCP} = ppp_lcp:start_link(self(), Session, Config),
+    {ok, PAP} = ppp_pap:start_link(self(), Session, Config),
     ppp_lcp:loweropen(LCP),
     ppp_lcp:lowerup(LCP),
-    {ok, establish, #state{config = Config, transport = TransportPid , transport_info = TransportInfo,
+    {ok, establish, #state{config = Config, session = Session,
+			   transport = TransportPid , transport_info = TransportInfo,
 			   lcp = LCP, pap = PAP,
 			   nps_required = NPsRequired, nps_open = ordsets:new(),
 			   peer_addrs = orddict:new()}}.
@@ -188,13 +191,8 @@ auth({auth_peer, pap, fail}, State) ->
 auth(link_down, State) ->
     lcp_close(<<"Link down">>, State).
 
-network(interim_accounting, State) ->
-    NewState = accounting_interim(State),
-    {next_state, network, NewState};
-
 network(session_timeout, State) ->
-    NewState = stop_session_timeout(State),
-    lcp_close(<<"Session Timeout">>, NewState);
+    lcp_close(<<"Session Timeout">>, State);
 
 network(network_protocol_timeout, State = #state{nps_required = NPsRequired, nps_open = NPsOpen}) ->
     case ordsets:is_subset(NPsRequired, NPsOpen) of
@@ -266,8 +264,6 @@ network({layer_down, lcp, Reason}, State) ->
 
 %% drain events
 terminating({auth_peer, pap, fail}, State) ->
-    {next_state, terminating, State};
-terminating(interim_accounting, State) ->
     {next_state, terminating, State};
 terminating(session_timeout, State) ->
     {next_state, terminating, State};
@@ -343,27 +339,30 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 protocol_reject(Request, #state{lcp = LCP}) ->
     ppp_lcp:protocol_reject(LCP, Request).
 
-transport_send(#state{transport = Transport, transport_info = {TransportModule, TransportRef}}, Data) ->
-    TransportModule:send(Transport, TransportRef, Data).
+transport_apply(#state{transport = Transport,
+		       transport_info = {TransportModule,
+					 TransportRef}}, F, A) ->
+    erlang:apply(TransportModule, F, [Transport, TransportRef | A]).
 
-transport_terminate(#state{transport = Transport, transport_info = {TransportModule, TransportRef}}) ->
-    TransportModule:terminate(Transport, TransportRef).
+transport_send(State, Data) ->
+    transport_apply(State, send, Data).
 
-transport_get_acc_counter(_, undefined) ->
+transport_terminate(State) ->
+    transport_apply(State, terminate, []).
+
+transport_get_acc_counter(undefined, _) ->
     [];
-transport_get_acc_counter(#state{transport = Transport, transport_info = {TransportModule, TransportRef}}, [IP|_]) ->
-    case TransportModule:get_counter(Transport, TransportRef, IP) of
-	#ppp_stats{packet_count	= {PktRx, PktTx},
-		   byte_count   = {CntRx, CntTx}} ->
-	    [{?Acct_Output_Gigawords, CntTx div 16#100000000},
-	     {?Acct_Input_Gigawords, CntRx div 16#100000000},
-	     {?Acct_Output_Octets, CntTx rem 16#100000000},
-	     {?Acct_Input_Octets, CntRx rem 16#100000000},
-	     {?Acct_Output_Packets, PktTx},
-	     {?Acct_Input_Packets, PktRx}];
-	_ -> []
+transport_get_acc_counter([IP|_], State) ->
+    case transport_apply(State, get_counter, [IP]) of
+	#ppp_stats{packet_count	= {RcvdPkts,  SendPkts},
+		   byte_count   = {RcvdBytes, SendBytes}} ->
+	    [{'InPackets',  RcvdPkts},
+	     {'OutPackets', SendPkts},
+	     {'InOctets',   RcvdBytes},
+	     {'OutOctets',  SendBytes}];
+	_ ->
+	    []
     end.
-	
 
 lowerup(#state{pap = PAP, ipcp = IPCP, ipv6cp = IPV6CP}) ->
     ppp_pap:lowerup(PAP),
@@ -445,13 +444,12 @@ lcp_close(Msg, State = #state{lcp = LCP}) ->
 %%     lcp_close(<<"No network protocols running">>, State).
 
 %% Network Phase Open
-phase_open(network, State = #state{config = Config}) ->
-    NewState1 = start_session_timeout(State),
-    NewState2 = accounting_start(init, NewState1),
-    {ok, IPCP} = ppp_ipcp:start_link(self(), Config),
+phase_open(network, State = #state{config = Config, session = Session}) ->
+    NewState2 = accounting_start(init, State),
+    {ok, IPCP} = ppp_ipcp:start_link(self(), Session, Config),
     ppp_ipcp:lowerup(IPCP),
     ppp_ipcp:loweropen(IPCP),
-    %% {ok, IPV6CP} = ppp_ipv6cp:start_link(self(), Config),
+    %% {ok, IPV6CP} = ppp_ipv6cp:start_link(self(), Session, Config),
     %% ppp_ipv6cp:lowerup(IPV6CP),
     %% ppp_ipv6cp:loweropen(IPV6CP),
     IPV6CP = undefined,
@@ -477,43 +475,23 @@ network_protocol_down(Protocol, State = #state{nps_required = NPsRequired, nps_o
 	    {next_state, network, NewState}
     end.
 
-start_session_timeout(State = #state{config = Config}) ->
-    case proplists:get_value(session_timeout, Config) of
-	TimeOut when is_integer(TimeOut) ->
-	    Ref = gen_fsm:send_event_after(TimeOut * 1000, session_timeout),
-	    State#state{timeout_ref = Ref};
-	_ ->
-	    State
-    end.
-
-stop_session_timeout(State = #state{timeout_ref = Ref}) ->
-    cancel_timer(Ref),
-    State#state{timeout_ref = undefined}.
-
-get_interim_accounting(Config) ->
-    case proplists:get_value(interim_accounting, Config) of
-	undefined ->
-	    {ok, Value} = application:get_env(interim_accounting),
-	    Value;
-	Value ->
-	    Value
-    end.
-
 accounting_init(ipcp, _OurOpts,
 		_HisOpts = #ipcp_opts{hisaddr = HisAddr},
-		State = #state{config = Config, peer_addrs = Addrs}) ->
+		State = #state{session = Session, peer_addrs = Addrs}) ->
+    ergw_aaa_session:set(Session, 'Framed-IP-Address', HisAddr),
     NewAddrs = orddict:append(ipcp, HisAddr, Addrs),
-    NewConfig = append_accounting_attr({'Framed-IP-Address', HisAddr}, Config),
-    State#state{config = NewConfig, peer_addrs = NewAddrs};
+    State#state{peer_addrs = NewAddrs};
 accounting_init(ipv6cp,	_OurOpts,
 		_HisOpts = #ipv6cp_opts{hisid = HisId},
-		State = #state{config = Config, peer_addrs = Addrs}) ->
+		State = #state{session = Session, peer_addrs = Addrs}) ->
+    ergw_aaa_session:set(Session, 'Framed-Interface-Id', HisId),
     NewAddrs = orddict:append(ipv6cp, HisId, Addrs),
-    NewConfig = append_accounting_attr({'Framed-Interface-Id', HisId}, Config),
-    State#state{config = NewConfig, peer_addrs = NewAddrs}.
+    State#state{peer_addrs = NewAddrs}.
 
 %% check wether all required Network Protocol are open, send Accounting Start if so
-check_accounting_start(State = #state{nps_required = NPsRequired, nps_open = NPsOpen, accounting_start = undefined}) ->
+check_accounting_start(State = #state{nps_required = NPsRequired,
+				      nps_open = NPsOpen,
+				      accounting_started = false}) ->
     case ordsets:is_subset(NPsRequired, NPsOpen) of
 	true ->
 	    accounting_start(network_up, State);
@@ -525,217 +503,22 @@ check_accounting_start(State) ->
 
 accounting_start(init, State) ->
     State;
+accounting_start(network_up, State = #state{session = Session}) ->
+    ergw_aaa_session:start(Session, #{}),
+    State#state{accounting_started = true}.
 
-accounting_start(network_up, State = #state{config = Config}) ->
-    NewState0 = State#state{accounting_start = now_ticks()},
-    lager:debug("--------------------------~nAccounting: OPEN~n--------------------------"),
-    spawn(fun() -> do_accounting_start(NewState0) end),
-    case get_interim_accounting(Config) of
-	InterimAccounting when InterimAccounting > 0 ->
-	    Ref = gen_fsm:send_event_after(InterimAccounting * 1000, interim_accounting),
-	    NewState0#state{interim_ref = Ref};
-	_ ->
-	    NewState0
-    end.
+accounting_stop(_Reason, State = #state{session = Session}) ->
+    SessionOpts = get_accounting_update(#{}, State),
+    ergw_aaa_session:stop(Session, SessionOpts),
+    State#state{accounting_started = false}.
 
-accounting_interim(State = #state{accounting_start = Start,
-				  config = Config}) ->
-    Now = now_ticks(),
-    InterimAccounting = get_interim_accounting(Config) * 10,
-    %% avoid time drifts...
-    Next = InterimAccounting - (Now - Start) rem InterimAccounting,
-    Ref = gen_fsm:send_event_after(InterimAccounting * 100, interim_accounting),
+accounting_update(FSM, SessionOpts) ->
+    lager:debug("accounting_update(~p, ~p)", [FSM, SessionOpts]),
+    SessionOpts.
 
-    lager:debug("--------------------------~nAccounting: Interim~nNext: ~p~n--------------------------", [Next]),
-    spawn(fun() -> do_accounting_interim(Now, State) end),
-    State#state{interim_ref = Ref}.
-
-accounting_stop(_Reason,
-		State = #state{interim_ref = Ref}) ->
-    Now = now_ticks(),
-    cancel_timer(Ref),
-    spawn(fun() -> do_accounting_stop(Now, State) end),
-    State#state{accounting_start = undefined, interim_ref = undefined}.
-
-append_accounting_attr(Opt, Config) ->
-    Accounting = proplists:get_value(accounting, Config, []),
-    lists:keystore(accounting, 1, Config, {accounting, [Opt|Accounting]}).
-
-accounting_attrs([], Attrs) ->
-    Attrs;
-accounting_attrs([{'Framed-IP-Address', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Framed_IP_Address, Value}|Attrs]);
-accounting_attrs([{'Framed-Interface-Id', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Framed_Interface_Id, Value}|Attrs]);
-accounting_attrs([{'Framed-IP-Netmask', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Framed_IP_Netmask, Value}|Attrs]);
-accounting_attrs([{session_id, Value}|Rest], Attrs) ->
-    Id = io_lib:format("~40.16.0B", [Value]),
-    accounting_attrs(Rest, [{?Acct_Session_Id, Id}|Attrs]);
-accounting_attrs([{class, Class}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Class, Class}|Attrs]);
-accounting_attrs([{calling_station, Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Calling_Station_Id, Value}|Attrs]);
-accounting_attrs([{called_station, Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Called_Station_Id, Value}|Attrs]);
-accounting_attrs([{port_id, Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?NAS_Port_Id, Value}|Attrs]);
-
-accounting_attrs([{port_type, pppoe_eth}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?NAS_Port_Type, 32}|Attrs]);
-accounting_attrs([{port_type, pppoe_vlan}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?NAS_Port_Type, 33}|Attrs]);
-accounting_attrs([{port_type, pppoe_qinq}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?NAS_Port_Type, 34}|Attrs]);
-
-%% DSL-Forum PPPoE Intermediate Agent Attributes
-accounting_attrs([{'ADSL-Agent-Circuit-Id', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?ADSL_Agent_Circuit_Id, Value}|Attrs]);
-accounting_attrs([{'ADSL-Agent-Remote-Id', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?ADSL_Agent_Remote_Id, Value}|Attrs]);
-accounting_attrs([{'Actual-Data-Rate-Upstream', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Actual_Data_Rate_Upstream, Value}|Attrs]);
-accounting_attrs([{'Actual-Data-Rate-Downstream', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Actual_Data_Rate_Downstream, Value}|Attrs]);
-accounting_attrs([{'Minimum-Data-Rate-Upstream', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Minimum_Data_Rate_Upstream, Value}|Attrs]);
-accounting_attrs([{'Minimum-Data-Rate-Downstream', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Minimum_Data_Rate_Downstream, Value}|Attrs]);
-accounting_attrs([{'Attainable-Data-Rate-Upstream', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Attainable_Data_Rate_Upstream, Value}|Attrs]);
-accounting_attrs([{'Attainable-Data-Rate-Downstream', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Attainable_Data_Rate_Downstream, Value}|Attrs]);
-accounting_attrs([{'Maximum-Data-Rate-Upstream', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Maximum_Data_Rate_Upstream, Value}|Attrs]);
-accounting_attrs([{'Maximum-Data-Rate-Downstream', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Maximum_Data_Rate_Downstream, Value}|Attrs]);
-accounting_attrs([{'Minimum-Data-Rate-Upstream-Low-Power', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Minimum_Data_Rate_Upstream_Low_Power, Value}|Attrs]);
-accounting_attrs([{'Minimum-Data-Rate-Downstream-Low-Power', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Minimum_Data_Rate_Downstream_Low_Power, Value}|Attrs]);
-accounting_attrs([{'Maximum-Interleaving-Delay-Upstream', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Maximum_Interleaving_Delay_Upstream, Value}|Attrs]);
-accounting_attrs([{'Actual-Interleaving-Delay-Upstream', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Actual_Interleaving_Delay_Upstream, Value}|Attrs]);
-accounting_attrs([{'Maximum-Interleaving-Delay-Downstream', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Maximum_Interleaving_Delay_Downstream, Value}|Attrs]);
-accounting_attrs([{'Actual-Interleaving-Delay-Downstream', Value}|Rest], Attrs) ->
-    accounting_attrs(Rest, [{?Actual_Interleaving_Delay_Downstream, Value}|Attrs]);
-
-accounting_attrs([H|Rest], Attrs) ->
-    lager:debug("unhandled accounting attr: ~p", [H]),
-    accounting_attrs(Rest, Attrs).
-
-do_accounting_start(#state{config = Config,
-			   peerid = PeerId}) ->
-    Accounting = proplists:get_value(accounting, Config, []),
-    UserName = case proplists:get_value(username, Accounting) of
-		   undefined -> PeerId;
-		   Value -> Value
-	       end,
-    {ok, NasId} = application:get_env(nas_identifier),
-    {ok, NasIP} = application:get_env(nas_ipaddr),
-    Attrs = [
-	     {?RStatus_Type, ?RStatus_Type_Start},
-	     {?User_Name, UserName},
-	     {?Service_Type, 2},
-	     {?Framed_Protocol, 1},
-	     {?NAS_Identifier, NasId},
-	     {?NAS_IP_Address, NasIP}
-	     | accounting_attrs(Accounting, [])],
-    Req = #radius_request{
-	     cmd = accreq,
-	     attrs = Attrs,
-	     msg_hmac = true},
-    {ok, NAS} = application:get_env(radius_acct_server),
-    eradius_client:send_request(NAS, Req).
-
-do_accounting_interim(Now, State = #state{config = Config,
-					  peerid = PeerId,
-					  peer_addrs = Addrs,
-					  accounting_start = Start}) ->
-    lager:debug("do_accounting_interim"),
-    Accounting = proplists:get_value(accounting, Config, []),
-    UserName = case proplists:get_value(username, Accounting) of
-		   undefined -> PeerId;
-		   Value -> Value
-	       end,
+get_accounting_update(SessionOpts, State = #state{peer_addrs = Addrs}) ->
+    lager:debug("get_accounting_update"),
     HisAddr = proplists:get_value(ipcp, Addrs),
     lager:debug("HisAddr: ~p", [HisAddr]),
-    Counter = transport_get_acc_counter(State, HisAddr),
-    {ok, NasId} = application:get_env(nas_identifier),
-    {ok, NasIP} = application:get_env(nas_ipaddr),
-    Attrs = [
-	     {?RStatus_Type, ?RStatus_Type_Update},
-	     {?User_Name, UserName},
-	     {?Service_Type, 2},
-	     {?Framed_Protocol, 1},
-	     {?NAS_Identifier, NasId},
-	     {?NAS_IP_Address, NasIP},
-	     {?RSession_Time, round((Now - Start) / 10)}
-	     | Counter]
-	++ accounting_attrs(Accounting, []),
-    Req = #radius_request{
-	     cmd = accreq,
-	     attrs = Attrs,
-	     msg_hmac = true},
-    {ok, NAS} = application:get_env(radius_acct_server),
-    eradius_client:send_request(NAS, Req).
-
-do_accounting_stop(Now, State = #state{config = Config,
-				       peerid = PeerId,
-				       peer_addrs = Addrs,
-				       accounting_start = Start}) ->
-    lager:debug("do_accounting_stop"),
-    Accounting = proplists:get_value(accounting, Config, []),
-    UserName = case proplists:get_value(username, Accounting) of
-		   undefined -> PeerId;
-		   Value -> Value
-	       end,
-    HisAddr = proplists:get_value(ipcp, Addrs),
-    lager:debug("HisAddr: ~p", [HisAddr]),
-    Start0 = if Start =:= undefined -> Now;
-		true -> Start
-	     end,
-    Counter = transport_get_acc_counter(State, HisAddr),
-    {ok, NasId} = application:get_env(nas_identifier),
-    {ok, NasIP} = application:get_env(nas_ipaddr),
-    Attrs = [
-	     {?RStatus_Type, ?RStatus_Type_Stop},
-	     {?User_Name, UserName},
-	     {?Service_Type, 2},
-	     {?Framed_Protocol, 1},
-	     {?NAS_Identifier, NasId},
-	     {?NAS_IP_Address, NasIP},
-	     {?RSession_Time, round((Now - Start0) / 10)}
-	     | Counter]
-	++ accounting_attrs(Accounting, []),
-    Req = #radius_request{
-	     cmd = accreq,
-	     attrs = Attrs,
-	     msg_hmac = true},
-    {ok, NAS} = application:get_env(radius_acct_server),
-    eradius_client:send_request(NAS, Req).
-
-accounting_on() ->
-    {ok, NasId} = application:get_env(nas_identifier),
-    {ok, NasIP} = application:get_env(nas_ipaddr),
-    Attrs = [
-	     {?RStatus_Type, ?RStatus_Type_On},
-	     {?NAS_Identifier, NasId},
-	     {?NAS_IP_Address, NasIP}],
-    Req = #radius_request{
-	     cmd = accreq,
-	     attrs = Attrs,
-	     msg_hmac = true},
-    {ok, NAS} = application:get_env(radius_acct_server),
-    eradius_client:send_request(NAS, Req).
-
-%% get time with 100ms +/50ms presision
-now_ticks() ->
-    round(erlang:system_time(milli_seconds) / 100).
-
-cancel_timer(undefined) ->
-    ok;
-cancel_timer(Ref) ->
-    gen_fsm:cancel_timer(Ref).
+    Counter = transport_get_acc_counter(HisAddr, State),
+    ergw_aaa_session:merge(SessionOpts, to_session(Counter)).

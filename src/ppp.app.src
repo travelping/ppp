@@ -8,14 +8,10 @@
                   stdlib,
                   sasl,
 		  regine,
-		  eradius
+		  ergw_aaa
                  ]},
   {mod, { ppp_app, []}},
   {env, [
-	 {nas_identifier, <<"DASH01">>},
-	 {nas_ipaddr, {10,0,0,1}},
-	 {interim_accounting, 300},
-	 {radius_auth_server, {{127,0,0,1}, 1812, <<"secret">>}},
-	 {radius_acct_server, {{127,0,0,1}, 1813, <<"secret">>}}
-	 ]}
+	 {nas_ipaddr, {10,0,0,1}}
+	]}
  ]}.

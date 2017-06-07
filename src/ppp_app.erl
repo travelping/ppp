@@ -16,8 +16,6 @@
 %% ===================================================================
 
 start(_StartType, _StartArgs) ->
-    eradius_dict:load_tables([dictionary, dictionary_alcatel_sr, dictionary_rfc4679]),
-    ppp_link:accounting_on(),
     ppp_sup:start_link().
 
 stop(_State) ->

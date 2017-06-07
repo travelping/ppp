@@ -5,7 +5,9 @@
 -module(ppp_proto).
 
 %% Initialization procedure
--callback start_link(Link :: pid(), Config :: list()) -> {ok, pid()}.
+-callback start_link(Link :: pid(),
+		     Session :: ergw_aaa:session(),
+		     Config :: list()) -> {ok, pid()}.
 
 %% Process a received packet
 -callback frame_in(FSM :: pid(), Frame :: term()) -> ok.
