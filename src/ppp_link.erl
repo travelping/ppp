@@ -4,7 +4,7 @@
 
 -module(ppp_link).
 
--behaviour(gen_fsm).
+-behaviour(gen_statem).
 
 %% API
 -export([start_link/4]).
@@ -12,10 +12,10 @@
 -export([layer_up/3, layer_down/3, layer_started/3, layer_finished/3]).
 -export([auth_withpeer/3, auth_peer/3]).
 
-%% gen_fsm callbacks
--export([init/1,
-	 establish/2, auth/2, network/2, terminating/2,
-	 handle_event/3, handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
+%% gen_statem callbacks
+-export([init/1, callback_mode/0,
+	 establish/3, auth/3, network/3, terminating/3,
+	 terminate/3, code_change/4]).
 
 -import(ergw_aaa_session, [to_session/1]).
 
@@ -27,7 +27,7 @@
 -define(SERVER, ?MODULE).
 -define(NETWORK_PROTOCOL_TIMEOUT, 5000).
 
--record(state, {
+-record(data, {
 	  config		:: list(),         		%% config options proplist
 	  session		:: ergw_aaa:session(),		%% erGW-AAA session
 	  transport		:: pid(), 			%% Transport Layer
@@ -57,38 +57,41 @@
 %%%===================================================================
 
 packet_in(Connection, Packet) ->
-    gen_fsm:send_event(Connection, {packet_in, ppp_frame:decode(Packet)}).
+    gen_statem:cast(Connection, {packet_in, ppp_frame:decode(Packet)}).
 
 send(Connection, Packet) ->
-    gen_fsm:send_all_state_event(Connection, {packet_out, Packet}).
+    gen_statem:cast(Connection, {packet_out, Packet}).
 
 link_down(Connection) ->
-    gen_fsm:send_event(Connection, link_down).
+    gen_statem:cast(Connection, link_down).
 
 layer_up(Link, Layer, Info) ->
-    gen_fsm:send_event(Link, {layer_up, Layer, Info}).
+    gen_statem:cast(Link, {layer_up, Layer, Info}).
 
 layer_down(Link, Layer, Info) ->
-    gen_fsm:send_event(Link, {layer_down, Layer, Info}).
+    gen_statem:cast(Link, {layer_down, Layer, Info}).
 
 layer_started(Link, Layer, Info) ->
-    gen_fsm:send_event(Link, {layer_started, Layer, Info}).
+    gen_statem:cast(Link, {layer_started, Layer, Info}).
 
 layer_finished(Link, Layer, Info) ->
-    gen_fsm:send_event(Link, {layer_finished, Layer, Info}).
+    gen_statem:cast(Link, {layer_finished, Layer, Info}).
 
 auth_withpeer(Link, Layer, Info) ->
-    gen_fsm:send_event(Link, {auth_withpeer, Layer, Info}).
+    gen_statem:cast(Link, {auth_withpeer, Layer, Info}).
 
 auth_peer(Link, Layer, Info) ->
-    gen_fsm:send_event(Link, {auth_peer, Layer, Info}).
+    gen_statem:cast(Link, {auth_peer, Layer, Info}).
 
 start_link(TransportModule, TransportPid, TransportRef, Config) ->
-    gen_fsm:start_link(?MODULE, [{TransportModule, TransportRef}, TransportPid, Config], []).
+    gen_statem:start_link(?MODULE, [{TransportModule, TransportRef}, TransportPid, Config], []).
 
 %%%===================================================================
-%%% gen_fsm callbacks
+%%% gen_statem callbacks
 %%%===================================================================
+
+callback_mode() ->
+    [state_functions, state_enter].
 
 init([TransportInfo, TransportPid, Config]) ->
     process_flag(trap_exit, true),
@@ -107,253 +110,295 @@ init([TransportInfo, TransportPid, Config]) ->
     {ok, PAP} = ppp_pap:start_link(self(), Session, Config),
     ppp_lcp:loweropen(LCP),
     ppp_lcp:lowerup(LCP),
-    {ok, establish, #state{config = Config, session = Session,
+    {ok, establish, #data{config = Config, session = Session,
 			   transport = TransportPid , transport_info = TransportInfo,
 			   lcp = LCP, pap = PAP,
 			   nps_required = NPsRequired, nps_open = ordsets:new(),
 			   peer_addrs = orddict:new()}}.
 
-establish({packet_in, Frame}, State = #state{lcp = LCP})
+establish(enter, _OldStateName, _Data) ->
+    keep_state_and_data;
+
+establish(cast, {packet_out, Frame}, Data) ->
+    transport_send(Data, Frame),
+    keep_state_and_data;
+
+establish(cast, {packet_in, Frame}, Data = #data{lcp = LCP})
   when element(1, Frame) == lcp ->
     lager:debug("LCP Frame in phase establish: ~p", [Frame]),
     case ppp_lcp:frame_in(LCP, Frame) of
- 	{up, OurOpts, HisOpts} ->
-	    NewState0 = State#state{our_lcp_opts = OurOpts, his_lcp_opts = HisOpts},
-	    lowerup(NewState0),
+	{up, OurOpts, HisOpts} ->
+	    NewData0 = Data#data{our_lcp_opts = OurOpts, his_lcp_opts = HisOpts},
+	    lowerup(NewData0),
 	    if
 		OurOpts#lcp_opts.neg_auth /= [] orelse
 		HisOpts#lcp_opts.neg_auth /= [] ->
-		    NewState1 = do_auth_peer(OurOpts#lcp_opts.neg_auth, NewState0),
-		    NewState2 = do_auth_withpeer(HisOpts#lcp_opts.neg_auth, NewState1),
-		    {next_state, auth, NewState2};
+		    NewData1 = do_auth_peer(OurOpts#lcp_opts.neg_auth, NewData0),
+		    NewData2 = do_auth_withpeer(HisOpts#lcp_opts.neg_auth, NewData1),
+		    {next_state, auth, NewData2};
 		true ->
-		    phase_open(network, NewState0)
+		    {next_state, network, NewData0}
 	    end;
 	Reply ->
 	    lager:debug("LCP got: ~p", [Reply]),
-	    {next_state, establish, State}
+	    keep_state_and_data
     end;
 
-establish({packet_in, Frame}, State) ->
+establish(cast, {packet_in, Frame}, _Data) ->
     %% RFC 1661, Sect. 3.4:
     %%   Any non-LCP packets received during this phase MUST be silently
     %%   discarded.
     lager:debug("non-LCP Frame in phase establish: ~p, ignoring", [Frame]),
-    {next_state, establish, State};
+    keep_state_and_data;
 
-establish(link_down, State) ->
-    lcp_close(<<"Link down">>, State);
+establish(cast, link_down, Data) ->
+    lcp_close(<<"Link down">>, Data);
 
-establish({layer_down, lcp, Reason}, State) ->
-    lowerdown(State),
-    lowerclose(Reason, State),
-    lcp_down(State);
+establish(cast, {layer_down, lcp, Reason}, Data) ->
+    lowerdown(Data),
+    lowerclose(Reason, Data),
+    lcp_down(Data);
 
-establish({layer_finished, lcp, terminated}, State) ->
+establish(cast, {layer_finished, lcp, terminated}, Data) ->
     lager:debug("LCP in phase establish got: terminated"),
     %% TODO: might want to restart LCP.....
-    {stop, normal, State}.
+    {stop, normal, Data};
 
-auth({packet_in, Frame}, State = #state{lcp = LCP})
+establish(info, Info, Data) ->
+    handle_info(Info, establish, Data).
+
+auth(enter, _OldStateName, _Data) ->
+    keep_state_and_data;
+
+auth(cast, {packet_out, Frame}, Data) ->
+    transport_send(Data, Frame),
+    keep_state_and_data;
+
+auth(cast, {packet_in, Frame}, Data = #data{lcp = LCP})
   when element(1, Frame) == lcp ->
     lager:debug("LCP Frame in phase auth: ~p", [Frame]),
     case ppp_lcp:frame_in(LCP, Frame) of
- 	down ->
-	    lcp_down(State);
+	down ->
+	    lcp_down(Data);
 	Reply ->
 	    lager:debug("LCP got: ~p", [Reply]),
-	    {next_state, auth, State}
+	    keep_state_and_data
     end;
 
 %% TODO: we might be able to start protocols on demand....
-auth({packet_in, Frame}, State = #state{pap = PAP})
+auth(cast, {packet_in, Frame}, Data = #data{pap = PAP})
   when element(1, Frame) == pap ->
     lager:debug("PAP Frame in phase auth: ~p", [Frame]),
     case ppp_pap:frame_in(PAP, Frame) of
 	ok ->
-	    {next_state, auth, State};
+	    keep_state_and_data;
 	Reply when is_tuple(Reply) ->
 	    lager:debug("PAP in phase auth got: ~p", [Reply]),
-	    auth_reply(Reply, State)
+	    auth_reply(Reply, Data)
     end;
 
-auth({packet_in, Frame}, State) ->
+auth(cast, {packet_in, Frame}, _Data) ->
     %% RFC 1661, Sect. 3.5:
     %%   Only Link Control Protocol, authentication protocol, and link quality
     %%   monitoring packets are allowed during this phase.  All other packets
     %%   received during this phase MUST be silently discarded.
     lager:debug("non-Auth Frame: ~p, ignoring", [Frame]),
-    {next_state, auth, State};
+    keep_state_and_data;
 
-auth({auth_peer, pap, fail}, State) ->
-    lcp_close(<<"Authentication failed">>, State);
+auth(cast, {auth_peer, pap, fail}, Data) ->
+    lcp_close(<<"Authentication failed">>, Data);
 
-auth(link_down, State) ->
-    lcp_close(<<"Link down">>, State).
+auth(cast, link_down, Data) ->
+    lcp_close(<<"Link down">>, Data);
 
-network(session_timeout, State) ->
-    lcp_close(<<"Session Timeout">>, State);
+auth(info, Info, Data) ->
+    handle_info(Info, auth, Data).
 
-network(network_protocol_timeout, State = #state{nps_required = NPsRequired, nps_open = NPsOpen}) ->
+%% Network Phase Open
+network(enter, _OldStateName, Data = #data{config = Config, session = Session}) ->
+    NewData2 = accounting_start(init, Data),
+    {ok, IPCP} = ppp_ipcp:start_link(self(), Session, Config),
+    ppp_ipcp:lowerup(IPCP),
+    ppp_ipcp:loweropen(IPCP),
+    %% {ok, IPV6CP} = ppp_ipv6cp:start_link(self(), Session, Config),
+    %% ppp_ipv6cp:lowerup(IPV6CP),
+    %% ppp_ipv6cp:loweropen(IPV6CP),
+    IPV6CP = undefined,
+    TimeOut = {state_timeout, network_protocol_timeout, ?NETWORK_PROTOCOL_TIMEOUT},
+    {keep_state, NewData2#data{ipcp = IPCP, ipv6cp = IPV6CP}, [TimeOut]};
+
+network(cast, session_timeout, Data) ->
+    lcp_close(<<"Session Timeout">>, Data);
+
+network(state_timeout, network_protocol_timeout,
+	Data = #data{nps_required = NPsRequired, nps_open = NPsOpen}) ->
     case ordsets:is_subset(NPsRequired, NPsOpen) of
 	true ->
-	    {next_state, network, State};
+	    keep_state_and_data;
 	_ ->
-	    lcp_close(<<"Network Protocols start-up timeout">>, State)
+	    lcp_close(<<"Network Protocols start-up timeout">>, Data)
     end;
 
-network({packet_in, Frame}, State = #state{lcp = LCP})
+network(cast, {packet_out, Frame}, Data) ->
+    transport_send(Data, Frame),
+    keep_state_and_data;
+
+network(cast, {packet_in, Frame}, Data = #data{lcp = LCP})
   when element(1, Frame) == lcp ->
     lager:debug("LCP Frame in phase network: ~p", [Frame]),
     case ppp_lcp:frame_in(LCP, Frame) of
- 	down ->
-	    State1 = accounting_stop(down, State),
-	    lcp_down(State1);
+	down ->
+	    Data1 = accounting_stop(down, Data),
+	    lcp_down(Data1);
 	{rejected, Protocol}
 	  when Protocol == ipcp;
 	       Protocol == ipv6cp ->
-	    network_protocol_down(Protocol, State);
+	    network_protocol_down(Protocol, Data);
 	Reply ->
 	    lager:debug("LCP got: ~p", [Reply]),
-	    {next_state, network, State}
+	    keep_state_and_data
     end;
 
 %% TODO: we might be able to start protocols on demand....
-network({packet_in, Frame}, State = #state{ipcp = IPCP})
+network(cast, {packet_in, Frame}, Data = #data{ipcp = IPCP})
   when element(1, Frame) == ipcp, is_pid(IPCP) ->
     lager:debug("IPCP Frame in phase network: ~p", [Frame]),
     case ppp_ipcp:frame_in(IPCP, Frame) of
 	down ->
-	    network_protocol_down(ipcp, State);
+	    network_protocol_down(ipcp, Data);
 	ok ->
-	    {next_state, network, State};
- 	{up, OurOpts, HisOpts} ->
-	    network_protocol_up(ipcp, OurOpts, HisOpts, State);
+	    keep_state_and_data;
+	{up, OurOpts, HisOpts} ->
+	    DataNew = network_protocol_up(ipcp, OurOpts, HisOpts, Data),
+	    {keep_state, DataNew};
 	Reply when is_tuple(Reply) ->
 	    lager:debug("IPCP in phase network got: ~p", [Reply]),
-	    {next_state, network, State}
+	    keep_state_and_data
     end;
 
-network({packet_in, Frame}, State = #state{ipv6cp = IPV6CP})
+network(cast, {packet_in, Frame}, Data = #data{ipv6cp = IPV6CP})
   when element(1, Frame) == ipv6cp, is_pid(IPV6CP) ->
     lager:debug("IPV6CP Frame in phase network: ~p", [Frame]),
     case ppp_ipv6cp:frame_in(IPV6CP, Frame) of
 	down ->
-	    network_protocol_down(ipv6cp, State);
+	    network_protocol_down(ipv6cp, Data);
 	ok ->
-	    {next_state, network, State};
- 	{up, OurOpts, HisOpts} ->
-	    network_protocol_up(ipv6cp, OurOpts, HisOpts, State);
+	    keep_state_and_data;
+	{up, OurOpts, HisOpts} ->
+	    DataNew = network_protocol_up(ipv6cp, OurOpts, HisOpts, Data),
+	    {keep_state, DataNew};
 	Reply when is_tuple(Reply) ->
 	    lager:debug("IPV6CP in phase network got: ~p", [Reply]),
-	    {next_state, network, State}
+	    keep_state_and_data
     end;
 
-network({packet_in, Frame}, State) ->
-    protocol_reject(Frame, State),
-    {next_state, network, State};
+network(cast, {packet_in, Frame}, Data) ->
+    protocol_reject(Frame, Data),
+    keep_state_and_data;
 
-network(link_down, State) ->
-    lcp_close(<<"Link down">>, State);
+network(cast, link_down, Data) ->
+    lcp_close(<<"Link down">>, Data);
 
-network({layer_down, lcp, Reason}, State) ->
-    State1 = accounting_stop(down, State),
-    lowerdown(State1),
-    lowerclose(Reason, State1),
-    lcp_down(State1).
+network(cast, {layer_down, lcp, Reason}, Data) ->
+    Data1 = accounting_stop(down, Data),
+    lowerdown(Data1),
+    lowerclose(Reason, Data1),
+    lcp_down(Data1);
+
+network(info, Info, Data) ->
+    handle_info(Info, network, Data).
+
+terminating(enter, _OldStateName, _Data) ->
+    keep_state_and_data;
 
 %% drain events
-terminating({auth_peer, pap, fail}, State) ->
-    {next_state, terminating, State};
-terminating(session_timeout, State) ->
-    {next_state, terminating, State};
-terminating(network_protocol_timeout, State) ->
-    {next_state, terminating, State};
+terminating(cast, {auth_peer, pap, fail}, _Data) ->
+    keep_state_and_data;
+terminating(cast, session_timeout, _Data) ->
+    keep_state_and_data;
+terminating(cast, network_protocol_timeout, _Data) ->
+    keep_state_and_data;
 
-terminating({packet_in, Frame}, State = #state{lcp = LCP})
+terminating(cast, {packet_out, Frame}, Data) ->
+    transport_send(Data, Frame),
+    keep_state_and_data;
+
+terminating(cast, {packet_in, Frame}, Data = #data{lcp = LCP})
   when element(1, Frame) == lcp ->
     lager:debug("LCP Frame in phase terminating: ~p", [Frame]),
     case ppp_lcp:frame_in(LCP, Frame) of
 	terminated ->
 	    lager:debug("LCP in phase terminating got: terminated"),
 	    %% TODO: might want to restart LCP.....
-	    {stop, normal, State};
+	    {stop, normal, Data};
 	Reply ->
 	    lager:debug("LCP in phase terminating got: ~p", [Reply]),
-	    {next_state, terminating, State}
+	    keep_state_and_data
     end;
 
-terminating({packet_in, Frame}, State) ->
+terminating(cast, {packet_in, Frame}, _Data) ->
     %% RFC 1661, Sect. 3.4:
     %%   Any non-LCP packets received during this phase MUST be silently
     %%   discarded.
     lager:debug("non-LCP Frame in phase terminating: ~p, ignoring", [Frame]),
-    {next_state, terminating, State};
+    keep_state_and_data;
 
-terminating(link_down, State) ->
-    {next_state, terminating, State};
+terminating(cast, link_down, _Data) ->
+    keep_state_and_data;
 
-terminating({layer_down, lcp, Reason}, State) ->
-    State1 = accounting_stop(down, State),
-    lowerdown(State1),
-    lowerclose(Reason, State1),
-    lcp_down(State1);
+terminating(cast, {layer_down, lcp, Reason}, Data) ->
+    Data1 = accounting_stop(down, Data),
+    lowerdown(Data1),
+    lowerclose(Reason, Data1),
+    lcp_down(Data1);
 
-terminating({layer_finished, lcp, terminated}, State) ->
+terminating(cast, {layer_finished, lcp, terminated}, Data) ->
     lager:debug("LCP in phase terminating got: terminated"),
     %% TODO: might want to restart LCP.....
-    transport_terminate(State),
-    {stop, normal, State}.
+    transport_terminate(Data),
+    {stop, normal, Data};
 
-handle_event({packet_out, Frame}, StateName, State) ->
-    transport_send(State, Frame),
-    {next_state, StateName, State};
+terminating(info, Info, Data) ->
+    handle_info(Info, terminating, Data).
 
-handle_event(_Event, StateName, State) ->
-    {next_state, StateName, State}.
-
-handle_sync_event(_Event, _From, StateName, State) ->
-    Reply = ok,
-    {reply, Reply, StateName, State}.
-
-handle_info({'EXIT', Transport, _Reason}, _StateName, State = #state{transport = Transport}) ->
+handle_info({'EXIT', Transport, _Reason}, _StateName, Data = #data{transport = Transport}) ->
     lager:debug("Transport ~p terminated", [Transport]),
-    State1 = accounting_stop(down, State),
-    {stop, normal, State1};
+    Data1 = accounting_stop(down, Data),
+    {stop, normal, Data1};
 
-handle_info(Info, StateName, State) ->
+handle_info(Info, StateName, _Data) ->
     lager:debug("~s: in state ~s, got info: ~p", [?MODULE, StateName, Info]),
-    {next_state, StateName, State}.
+    keep_state_and_data.
 
-terminate(_Reason, _StateName, _State) ->
+terminate(_Reason, _StateName, _Data) ->
     lager:debug("ppp_link ~p terminated", [self()]),
     ok.
 
-code_change(_OldVsn, StateName, State, _Extra) ->
-    {ok, StateName, State}.
+code_change(_OldVsn, StateName, Data, _Extra) ->
+    {ok, StateName, Data}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
 
-protocol_reject(Request, #state{lcp = LCP}) ->
+protocol_reject(Request, #data{lcp = LCP}) ->
     ppp_lcp:protocol_reject(LCP, Request).
 
-transport_apply(#state{transport = Transport,
+transport_apply(#data{transport = Transport,
 		       transport_info = {TransportModule,
 					 TransportRef}}, F, A) ->
     erlang:apply(TransportModule, F, [Transport, TransportRef | A]).
 
-transport_send(State, Data) ->
-    transport_apply(State, send, Data).
+transport_send(Data, Frame) ->
+    transport_apply(Data, send, Frame).
 
-transport_terminate(State) ->
-    transport_apply(State, terminate, []).
+transport_terminate(Data) ->
+    transport_apply(Data, terminate, []).
 
 transport_get_acc_counter(undefined, _) ->
     [];
-transport_get_acc_counter([IP|_], State) ->
-    case transport_apply(State, get_counter, [IP]) of
+transport_get_acc_counter([IP|_], Data) ->
+    case transport_apply(Data, get_counter, [IP]) of
 	#ppp_stats{packet_count	= {RcvdPkts,  SendPkts},
 		   byte_count   = {RcvdBytes, SendBytes}} ->
 	    [{'InPackets',  RcvdPkts},
@@ -364,43 +409,43 @@ transport_get_acc_counter([IP|_], State) ->
 	    []
     end.
 
-lowerup(#state{pap = PAP, ipcp = IPCP, ipv6cp = IPV6CP}) ->
+lowerup(#data{pap = PAP, ipcp = IPCP, ipv6cp = IPV6CP}) ->
     ppp_pap:lowerup(PAP),
     ppp_ipcp:lowerup(IPCP),
     ppp_ipv6cp:lowerup(IPV6CP),
     ok.
 
-lowerdown(#state{pap = PAP, ipcp = IPCP, ipv6cp = IPV6CP}) ->
+lowerdown(#data{pap = PAP, ipcp = IPCP, ipv6cp = IPV6CP}) ->
     ppp_pap:lowerdown(PAP),
     ppp_ipcp:lowerdown(IPCP),
     ppp_ipv6cp:lowerdown(IPV6CP),
     ok.
 
-lowerclose(Reason, #state{pap = PAP, ipcp = IPCP, ipv6cp = IPV6CP}) ->
+lowerclose(Reason, #data{pap = PAP, ipcp = IPCP, ipv6cp = IPV6CP}) ->
     ppp_pap:lowerclose(PAP, Reason),
     ppp_ipcp:lowerclose(IPCP, Reason),
     ppp_ipv6cp:lowerclose(IPV6CP, Reason),
     ok.
 
-do_auth_peer([], State) ->
-    State;
-do_auth_peer([pap|_], State = #state{auth_pending = Pending, pap = PAP}) ->
+do_auth_peer([], Data) ->
+    Data;
+do_auth_peer([pap|_], Data = #data{auth_pending = Pending, pap = PAP}) ->
     ppp_pap:auth_peer(PAP),
-    State#state{auth_pending = [auth_peer|Pending]}.
+    Data#data{auth_pending = [auth_peer|Pending]}.
 
-do_auth_withpeer([], State) ->
-    State;
-do_auth_withpeer([pap|_], State = #state{auth_pending = Pending, pap = PAP}) ->
+do_auth_withpeer([], Data) ->
+    Data;
+do_auth_withpeer([pap|_], Data = #data{auth_pending = Pending, pap = PAP}) ->
     ppp_pap:auth_withpeer(PAP, <<"">>, <<"">>),
-    State#state{auth_pending = [auth_withpeer|Pending]}.
+    Data#data{auth_pending = [auth_withpeer|Pending]}.
 
-auth_success(Direction, State = #state{auth_pending = Pending}) ->
-    NewState = State#state{auth_pending = proplists:delete(Direction, Pending)},
+auth_success(Direction, Data = #data{auth_pending = Pending}) ->
+    NewData = Data#data{auth_pending = proplists:delete(Direction, Pending)},
     if
-	NewState#state.auth_pending == [] ->
-	    phase_open(network, NewState);
+	NewData#data.auth_pending == [] ->
+	    {next_state, network, NewData};
 	true ->
-	    {next_state, auth, NewState}
+	    {next_state, auth, NewData}
     end.
 
 proplists_merge_recusive(undefined, L2) when is_list(L2) ->
@@ -416,109 +461,95 @@ proplists_merge_recusive(L1, L2) when is_list(L1), is_list(L2) ->
 		    proplists:unfold(L2)),
     proplists:compact(L).
 
-auth_reply({auth_peer, success, PeerId, Opts}, State = #state{config = Config}) ->
+auth_reply({auth_peer, success, PeerId, Opts}, Data = #data{config = Config}) ->
     Config0 = proplists_merge_recusive(Config, Opts),
-    NewState = State#state{config = Config0, peerid = PeerId},
-    auth_success(auth_peer, NewState);
+    NewData = Data#data{config = Config0, peerid = PeerId},
+    auth_success(auth_peer, NewData);
 
-auth_reply({auth_peer, fail}, State) ->
-    lcp_close(<<"Authentication failed">>, State);
-    
-auth_reply({auth_withpeer, success}, State) ->
-    auth_success(auth_withpeer, State);
-  
-auth_reply({auth_withpeer, fail}, State) ->
-    lcp_close(<<"Failed to authenticate ourselves to peer">>, State).
+auth_reply({auth_peer, fail}, Data) ->
+    lcp_close(<<"Authentication failed">>, Data);
 
-lcp_down(State) ->
-    NewState = State#state{our_lcp_opts = undefined, his_lcp_opts = undefined},
-    {next_state, terminating, NewState}.
+auth_reply({auth_withpeer, success}, Data) ->
+    auth_success(auth_withpeer, Data);
 
-lcp_close(Msg, State = #state{lcp = LCP}) ->
+auth_reply({auth_withpeer, fail}, Data) ->
+    lcp_close(<<"Failed to authenticate ourselves to peer">>, Data).
+
+lcp_down(Data) ->
+    NewData = Data#data{our_lcp_opts = undefined, his_lcp_opts = undefined},
+    {next_state, terminating, NewData}.
+
+lcp_close(Msg, Data = #data{lcp = LCP}) ->
     Reply = ppp_lcp:lowerclose(LCP, Msg),
     lager:debug("LCP close got: ~p", [Reply]),
-    {next_state, terminating, State}.
+    {next_state, terminating, Data}.
 
 %% Network Phase Finished
-%% phase_finished(network, State) ->
-%%     lcp_close(<<"No network protocols running">>, State).
+%% phase_finished(network, Data) ->
+%%     lcp_close(<<"No network protocols running">>, Data).
 
-%% Network Phase Open
-phase_open(network, State = #state{config = Config, session = Session}) ->
-    NewState2 = accounting_start(init, State),
-    {ok, IPCP} = ppp_ipcp:start_link(self(), Session, Config),
-    ppp_ipcp:lowerup(IPCP),
-    ppp_ipcp:loweropen(IPCP),
-    %% {ok, IPV6CP} = ppp_ipv6cp:start_link(self(), Session, Config),
-    %% ppp_ipv6cp:lowerup(IPV6CP),
-    %% ppp_ipv6cp:loweropen(IPV6CP),
-    IPV6CP = undefined,
-    gen_fsm:send_event_after(?NETWORK_PROTOCOL_TIMEOUT, network_protocol_timeout),
-    {next_state, network, NewState2#state{ipcp = IPCP, ipv6cp = IPV6CP}}.
-
-network_protocol_up(Protocol, OurOpts, HisOpts, State) ->
+network_protocol_up(Protocol, OurOpts, HisOpts, Data) ->
     lager:debug("--------------------------~n~p is UP~n--------------------------", [Protocol]),
-    NewState0 = State#state{nps_open = ordsets:add_element(Protocol, State#state.nps_open)},
-    NewState1 = accounting_init(Protocol, OurOpts, HisOpts, NewState0),
-    NewState2 = check_accounting_start(NewState1),
-    {next_state, network, NewState2}.
+    NewData0 = Data#data{nps_open = ordsets:add_element(Protocol, Data#data.nps_open)},
+    NewData1 = accounting_init(Protocol, OurOpts, HisOpts, NewData0),
+    check_accounting_start(NewData1).
 
-network_protocol_down(Protocol, State = #state{nps_required = NPsRequired, nps_open = NPsOpen}) ->
+network_protocol_down(Protocol, Data = #data{nps_required = NPsRequired, nps_open = NPsOpen}) ->
     lager:debug("--------------------------~n~p is DOWN~n--------------------------", [Protocol]),
-    NewState = State#state{nps_open = ordsets:del_element(Protocol, NPsOpen)},
+    NewData = Data#data{nps_open = ordsets:del_element(Protocol, NPsOpen)},
     case ordsets:is_element(Protocol, NPsRequired) of
 	true ->
 	    %% a required Network Protocol is down, kill the entire link
 	    Msg = iolist_to_binary(io_lib:format("network protocol ~p is required, but was rejected", [Protocol])),
-	    lcp_close(Msg, NewState);
+	    lcp_close(Msg, NewData);
 	_ ->
-	    {next_state, network, NewState}
+	    {keep_state, NewData}
     end.
 
 accounting_init(ipcp, _OurOpts,
 		_HisOpts = #ipcp_opts{hisaddr = HisAddr},
-		State = #state{session = Session, peer_addrs = Addrs}) ->
+		Data = #data{session = Session, peer_addrs = Addrs}) ->
     ergw_aaa_session:set(Session, 'Framed-IP-Address', HisAddr),
     NewAddrs = orddict:append(ipcp, HisAddr, Addrs),
-    State#state{peer_addrs = NewAddrs};
+    Data#data{peer_addrs = NewAddrs};
 accounting_init(ipv6cp,	_OurOpts,
 		_HisOpts = #ipv6cp_opts{hisid = HisId},
-		State = #state{session = Session, peer_addrs = Addrs}) ->
+		Data = #data{session = Session, peer_addrs = Addrs}) ->
     ergw_aaa_session:set(Session, 'Framed-Interface-Id', HisId),
     NewAddrs = orddict:append(ipv6cp, HisId, Addrs),
-    State#state{peer_addrs = NewAddrs}.
+    Data#data{peer_addrs = NewAddrs}.
 
 %% check wether all required Network Protocol are open, send Accounting Start if so
-check_accounting_start(State = #state{nps_required = NPsRequired,
+check_accounting_start(Data = #data{nps_required = NPsRequired,
 				      nps_open = NPsOpen,
 				      accounting_started = false}) ->
     case ordsets:is_subset(NPsRequired, NPsOpen) of
 	true ->
-	    accounting_start(network_up, State);
+	    accounting_start(network_up, Data);
 	_ ->
-	    State
+	    Data
     end;
-check_accounting_start(State) ->
-    State.
+check_accounting_start(Data) ->
+    Data.
 
-accounting_start(init, State) ->
-    State;
-accounting_start(network_up, State = #state{session = Session}) ->
+accounting_start(init, Data) ->
+    Data;
+accounting_start(network_up, Data = #data{session = Session}) ->
     ergw_aaa_session:start(Session, #{}),
-    State#state{accounting_started = true}.
+    Data#data{accounting_started = true}.
 
-accounting_stop(_Reason, State = #state{session = Session}) ->
-    SessionOpts = get_accounting_update(#{}, State),
+accounting_stop(_Reason, Data = #data{session = Session}) ->
+    SessionOpts = get_accounting_update(#{}, Data),
     ergw_aaa_session:stop(Session, SessionOpts),
-    State#state{accounting_started = false}.
+    Data#data{accounting_started = false}.
 
 accounting_update(FSM, SessionOpts) ->
     lager:debug("accounting_update(~p, ~p)", [FSM, SessionOpts]),
     SessionOpts.
 
-get_accounting_update(SessionOpts, State = #state{peer_addrs = Addrs}) ->
+get_accounting_update(SessionOpts, Data = #data{peer_addrs = Addrs}) ->
     lager:debug("get_accounting_update"),
     HisAddr = proplists:get_value(ipcp, Addrs),
     lager:debug("HisAddr: ~p", [HisAddr]),
-    Counter = transport_get_acc_counter(HisAddr, State),
+    Counter = transport_get_acc_counter(HisAddr, Data),
     ergw_aaa_session:merge(SessionOpts, to_session(Counter)).
