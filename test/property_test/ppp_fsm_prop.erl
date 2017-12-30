@@ -38,19 +38,21 @@
 -endif.
 
 fsm_prop(_Config) ->
-    ?FORALL(Cmds, proper_fsm:commands(?MODULE),
-            begin
-                {ok, Link} = ppp_test_link:start(),
-                {ok, FSM} = ppp_test_fsm:start(Link),
-                {History, State, Result} = proper_fsm:run_commands(?MODULE, Cmds, [{ppp_fsm, FSM}]),
-		catch ppp_test_fsm:stop(FSM),
-		catch ppp_test_link:stop(Link),
-                ?WHENFAIL(ct:pal("History: ~w\nState: ~w\nResult: ~p\n",
-				 [History, State, Result]),
-                          aggregate(zip(proper_fsm:state_names(History),
-                                        command_names(Cmds)),
-				    Result =:= ok))
-            end).
+    numtests(1000,
+	     ?FORALL(Cmds, proper_fsm:commands(?MODULE),
+		     begin
+			 {ok, Link} = ppp_test_link:start(),
+			 {ok, FSM} = ppp_test_fsm:start(Link),
+			 {History, State, Result} =
+			     proper_fsm:run_commands(?MODULE, Cmds, [{ppp_fsm, FSM}]),
+			 catch ppp_test_fsm:stop(FSM),
+			 catch ppp_test_link:stop(Link),
+			 ?WHENFAIL(ct:pal("History: ~w\nState: ~w\nResult: ~p\n",
+					  [History, State, Result]),
+				   aggregate(zip(proper_fsm:state_names(History),
+						 command_names(Cmds)),
+					     Result =:= ok))
+		     end)).
 
 %%--------------------------------------------------------------------
 
