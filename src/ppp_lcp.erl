@@ -406,14 +406,24 @@ opened(_, State) ->
 
 %%===================================================================
 
+cancel_timer(Ref) ->
+    case erlang:cancel_timer(Ref) of
+	false ->
+	    receive {timeout, Ref, _} -> 0
+	    after 0 -> false
+	    end;
+	RemainingTime ->
+	    RemainingTime
+    end.
+
 rearm_timer(Msg, Timeout, State = #state{timer = Timer}) ->
-    if is_reference(Timer) -> gen_fsm:cancel_timer(Timer);
+    if is_reference(Timer) -> cancel_timer(Timer);
        true -> ok
     end,
-    State#state{timer = gen_fsm:start_timer(Timeout, Msg)}.
+    State#state{timer = erlang:start_timer(Timeout, self(), Msg)}.
 
 stop_timer(State = #state{timer = Timer}) ->
-    if is_reference(Timer) -> gen_fsm:cancel_timer(Timer);
+    if is_reference(Timer) -> cancel_timer(Timer);
        true -> ok
     end,
     State#state{timer = undefined}.
