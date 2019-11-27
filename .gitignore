@@ -1,5 +1,4 @@
 *~
 *.beam
 /ebin/*.app
-
-/tetrapak/.local.cache
+/rebar.lock
