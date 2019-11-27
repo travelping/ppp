@@ -3,8 +3,6 @@ dist: xenial
 language: erlang
 
 otp_release:
- - 21.1.4
- - 21.2.7
  - 21.3.8.1
  - 22.0.7
  - 22.1.8
@@ -17,4 +15,5 @@ before_install:
 
 script:
   - ./rebar3 compile
-  - ./rebar3 do xref, ct, coveralls send
+  - ./rebar3 do xref, ct
+  - (./rebar3 as test do coveralls send || /bin/true)
