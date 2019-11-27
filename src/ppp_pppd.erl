@@ -14,6 +14,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -define(SERVER, ?MODULE). 
 
 -record(state, {port, connection}).
@@ -86,7 +88,7 @@ handle_call({send, Packet}, _From, State = #state{port = Port}) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_cast(Msg, State) ->
-    lager:debug("pppd Cast: ~p", [Msg]),
+    ?LOG(debug, "pppd Cast: ~p", [Msg]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -100,17 +102,17 @@ handle_cast(Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_info({Port, {data, Data}}, State = #state{port = Port, connection = Connection}) ->
-    lager:debug("pppd Data: ~p", [Data]),
+    ?LOG(debug, "pppd Data: ~p", [Data]),
     HDLC = ppp_hdlc:decapsulate(Data),
     lists:foreach(fun({_Address, _Control, PPP}) -> ppp_link:packet_in(Connection, PPP) end, HDLC),
     {noreply, State};
 
 handle_info({Port, {exit_status, Status}}, State = #state{port = Port}) ->
-    lager:debug("pppd existed with: ~p", [Status]),
+    ?LOG(debug, "pppd existed with: ~p", [Status]),
     {stop, normal, State};
 
 handle_info(Info, State) ->
-    lager:debug("pppd Info: ~p", [Info]),
+    ?LOG(debug, "pppd Info: ~p", [Info]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -125,7 +127,7 @@ handle_info(Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
-    lager:debug("ppp_pppd ~p terminated", [self()]),
+    ?LOG(debug, "ppp_pppd ~p terminated", [self()]),
     ok.
 
 %%--------------------------------------------------------------------

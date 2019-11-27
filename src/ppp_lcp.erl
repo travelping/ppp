@@ -17,6 +17,7 @@
 -export([handler_lower_event/3]).
 -export([opened/2, opened/3]).
 
+-include_lib("kernel/include/logger.hrl").
 -include("ppp_fsm.hrl").
 -include("ppp_lcp.hrl").
 
@@ -312,7 +313,7 @@ up(State = #state{got_opts = GotOpts,
 		  his_opts = HisOpts,
 		  echo_interval = EchoInterval,
 		  echo_failure = EchoFailure}) ->
-    lager:debug("~p: Up", [?MODULE]),
+    ?LOG(debug, "~p: Up", [?MODULE]),
     %% Link is ready,
     %% set MRU, MMRU, ASyncMap and Compression options on Link
     %% Set Link Up
@@ -330,7 +331,7 @@ up(State = #state{got_opts = GotOpts,
     {Reply, NewState}.
 
 down(State) ->
-    lager:debug("~p: Down", [?MODULE]),
+    ?LOG(debug, "~p: Down", [?MODULE]),
 
     %% Disable LCP Echos
     NewState = stop_timer(State),
@@ -339,13 +340,13 @@ down(State) ->
     {down, NewState}.
 
 starting(State) ->
-    lager:debug("~p: Starting", [?MODULE]),
+    ?LOG(debug, "~p: Starting", [?MODULE]),
     %%link_required(f->unit);
     {starting, State}.
 
 
 finished(State) ->
-    lager:debug("~p: Finished", [?MODULE]),
+    ?LOG(debug, "~p: Finished", [?MODULE]),
     %% link_terminated(f->unit);
     {terminated, State}.
 
@@ -366,7 +367,7 @@ opened({timeout, _Ref, request_echo}, ReqId,
 	    Request = {?PROTOCOL, 'CP-Echo-Request', NewReqId, GotOpts#lcp_opts.magicnumber},
 	    {send, Request, NewReqId, opened, NewState1};
 	0 ->
-	    lager:debug("~p: Echo-Request Timeout, closing", [?MODULE]),
+	    ?LOG(debug, "~p: Echo-Request Timeout, closing", [?MODULE]),
 	    {close, <<"Peer not responding">>, State}
     end;
 
@@ -387,7 +388,7 @@ opened({_, 'CP-Echo-Reply', _Id, Magic}, State =
     {ok, opened, NewState1};
 
 opened({_, 'CP-Echo-Reply', _Id, Magic}, State = #state{his_opts = HisOpts}) ->
-    lager:debug("got echo-reply with invaid magic, got ~p, expected ~p",
+    ?LOG(debug, "got echo-reply with invaid magic, got ~p, expected ~p",
 	      [Magic, HisOpts#lcp_opts.magicnumber]),
     {ignore, opened, State};
 
@@ -397,7 +398,7 @@ opened({_, 'CP-Echo-Request', Id, Magic}, State = #state{got_opts = GotOpts, his
     {send_reply, opened, Reply, State};
 
 opened({_, 'CP-Echo-Request', _Id, Magic}, State = #state{his_opts = HisOpts}) ->
-    lager:debug("got echo-request with invaid magic, got ~p, expected ~p",
+    ?LOG(debug, "got echo-request with invaid magic, got ~p, expected ~p",
 	      [Magic, HisOpts#lcp_opts.magicnumber]),
     {ignore, opened, State};
 
@@ -449,7 +450,7 @@ lcp_addci(auth, #lcp_opts{neg_auth = GotAuth})
     suggest_auth(GotAuth);
 
 lcp_addci(auth, #lcp_opts{neg_auth = GotAuth}) ->
-    lager:debug("lcp_addci: skiping auth: ~p", [GotAuth]),
+    ?LOG(debug, "lcp_addci: skiping auth: ~p", [GotAuth]),
     [];
 
 lcp_addci(quality, #lcp_opts{neg_lqr = true, lqr_period = GotPeriod}) ->
@@ -548,8 +549,8 @@ lcp_nakci({auth, NakAuth}, #lcp_opts{neg_auth = GotAuth}, _WantOpts, TryOpts, Na
 	    false;
 	[LastAuth|TryAuth] ->
 	    T1 = TryOpts#lcp_opts{neg_auth = TryAuth},
-	    lager:debug("neg_auth: ~p", [NakOpts#lcp_opts.neg_auth]),
-	    lager:debug("NakAuth: ~p", [NakAuth]),
+	    ?LOG(debug, "neg_auth: ~p", [NakOpts#lcp_opts.neg_auth]),
+	    ?LOG(debug, "NakAuth: ~p", [NakAuth]),
 	    N1 = NakOpts#lcp_opts{neg_auth = NakOpts#lcp_opts.neg_auth ++ [LastAuth]},
 	    {T1, N1}
     end;
@@ -645,14 +646,14 @@ lcp_nakci(_, _, _, _, _) ->
 %% Note: on generating Ack/Naks we do preserve ordering!
 %%
 lcp_nakcis([], _, _, TryOpts, _) ->
-    lager:debug("lcp_nakcis: ~p", [TryOpts]),
+    ?LOG(debug, "lcp_nakcis: ~p", [TryOpts]),
     TryOpts;
 lcp_nakcis([Opt|Options], GotOpts, WantOpts, TryOpts, NakOpts) ->
     case lcp_nakci(Opt, GotOpts, WantOpts, TryOpts, NakOpts) of
 	{NewTryOpts, NewNakOpts} ->
 	    lcp_nakcis(Options, GotOpts, WantOpts, NewTryOpts, NewNakOpts);
 	_ ->
-	    lager:debug("lcp_nakcis: received bad Nakt!"),
+	    ?LOG(debug, "lcp_nakcis: received bad Nakt!"),
 	    false
     end.
 
@@ -685,7 +686,7 @@ lcp_rejci(pfc, #lcp_opts{neg_pcompression = true}, TryOpts) ->
     TryOpts#lcp_opts{neg_pcompression = false};
 
 lcp_rejci(acfc, #lcp_opts{neg_accompression = true}, TryOpts) ->
-    lager:debug("acfs rejected"),
+    ?LOG(debug, "acfs rejected"),
     TryOpts#lcp_opts{neg_accompression = false};
 
 lcp_rejci({mrru, MRRU}, #lcp_opts{neg_mrru = true, mrru = MRRU}, TryOpts) ->
@@ -717,7 +718,7 @@ lcp_rejcis([RejOpt|RejOpts], GotOpts, TryOpts) ->
 	NewTryOpts when is_record(NewTryOpts, lcp_opts) ->
 	    lcp_rejcis(RejOpts, GotOpts, NewTryOpts);
 	_ ->
-	    lager:debug("lcp_rejcis: received bad Reject!"),
+	    ?LOG(debug, "lcp_rejcis: received bad Reject!"),
 	    false
     end.
 
@@ -733,8 +734,8 @@ lcp_ackci({asyncmap, AckACCM}, #lcp_opts{neg_asyncmap = GotIt, asyncmap = GotACC
     GotIt and (AckACCM == GotACCM);
     
 lcp_ackci({auth, AckAuth}, #lcp_opts{neg_auth = GotAuth}) ->
-    lager:debug("AckAuth: ~p", [AckAuth]),
-    lager:debug("GotAuth: ~p", [GotAuth]),
+    ?LOG(debug, "AckAuth: ~p", [AckAuth]),
+    ?LOG(debug, "GotAuth: ~p", [GotAuth]),
     lists:member(AckAuth, GotAuth);
 
 lcp_ackci({quality, AckQP, AckPeriod}, #lcp_opts{neg_lqr = GotIt, lqr_period = GotPeriod}) ->
@@ -763,7 +764,7 @@ lcp_ackci({epdisc, AckClass, AckAddress},
 			     #epdisc{class = GotClass, address = GotAddress}}) ->
     GotIt and (AckClass == GotClass) and (AckAddress == GotAddress);
 lcp_ackci(Ack, _) ->
-    lager:debug("invalid Ack: ~p", [Ack]),
+    ?LOG(debug, "invalid Ack: ~p", [Ack]),
     false.
 
 %%TODO: does this really matter?
@@ -779,7 +780,7 @@ lcp_ackcis([], _) ->
 lcp_ackcis([AckOpt|AckOpts], GotOpts) ->
     case lcp_ackci(AckOpt, GotOpts) of
 	false ->
-	    lager:debug("lcp_ackcis: received bad Ack! ~p, ~p", [AckOpt, GotOpts]),
+	    ?LOG(debug, "lcp_ackcis: received bad Ack! ~p, ~p", [AckOpt, GotOpts]),
 	    false;
 	_ ->
 	    lcp_ackcis(AckOpts, GotOpts)
@@ -818,7 +819,7 @@ lcp_reqci({asyncmap, ReqACCM}, #lcp_opts{neg_asyncmap = true, asyncmap = Allowed
 
 lcp_reqci({auth, _}, #lcp_opts{neg_auth = PermitedAuth}, _, HisOpts)
   when not is_list(PermitedAuth) orelse PermitedAuth == [] ->
-    lager:debug("No auth is possible"),
+    ?LOG(debug, "No auth is possible"),
     {rej, HisOpts};
 
 %% Authtype must be PAP, CHAP, or EAP.
@@ -832,7 +833,7 @@ lcp_reqci({auth, _}, #lcp_opts{neg_auth = PermitedAuth}, _, HisOpts)
 
 lcp_reqci({auth, ReqAuth}, _, _, HisOpts = #lcp_opts{neg_auth = HisAuth})
   when HisAuth /= none ->
-    lager:debug("lcp_reqci: rcvd AUTHTYPE ~p, rejecting...", [ReqAuth]),
+    ?LOG(debug, "lcp_reqci: rcvd AUTHTYPE ~p, rejecting...", [ReqAuth]),
     {rej, HisOpts};
 lcp_reqci({auth, ReqAuth}, #lcp_opts{neg_auth = PermitedAuth}, _, HisOpts) ->
     case lists:member(ReqAuth, PermitedAuth) of
@@ -898,8 +899,8 @@ lcp_reqci({epdisc, ReqClass, ReqAddress}, #lcp_opts{neg_endpoint = true}, _, His
     {Verdict, HisOptsNew};
 
 lcp_reqci(Req, _, _, HisOpts) ->
-    lager:debug("lcp_reqci: rejecting: ~p", [Req]),
-    lager:debug("His: ~p", [HisOpts]),
+    ?LOG(debug, "lcp_reqci: rejecting: ~p", [Req]),
+    ?LOG(debug, "His: ~p", [HisOpts]),
     {rej, HisOpts}.
 
 %% take the first element that is present in both lists

@@ -6,6 +6,8 @@
 
 -export([decapsulate/1, encapsulate/1, crc16/1]).
 
+-include_lib("kernel/include/logger.hrl").
+
 decapsulate(Data) ->
     decapsulate_frames(binary:split(Data, <<16#7e>>, [global]), []).
 
@@ -23,7 +25,7 @@ decapsulate_frames([HDLCData|Rest], Acc) ->
 	    R = {Address, Control, PayLoad},
 	    decapsulate_frames(Rest, [R|Acc]);
 	MyCRC ->
-	    lager:debug("invalid HDLC CRC, wanted ~.16.0B, got ~.16.0B", [MyCRC, CRC]),
+	    ?LOG(debug, "invalid HDLC CRC, wanted ~.16.0B, got ~.16.0B", [MyCRC, CRC]),
 	    decapsulate_frames(Rest, Acc)
     end.
 

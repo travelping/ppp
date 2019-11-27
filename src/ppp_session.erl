@@ -12,6 +12,8 @@
 %% regine_server callbacks
 -export([init/1, handle_register/4, handle_unregister/3, handle_pid_remove/3, handle_death/3, terminate/2]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -define(SERVER, ?MODULE). 
 
 -record(state, {
@@ -26,7 +28,7 @@ start_link() ->
 
 new(HandlerMod, HandlerPid, HandlerInfo, PeerId, SessionId, PPPConfig) ->
     {ok, Session} = ppp_link_sup:new(HandlerMod, HandlerPid, HandlerInfo, PPPConfig),
-    lager:debug("new Session: ~p, ~p", [SessionId, Session]),
+    ?LOG(debug, "new Session: ~p, ~p", [SessionId, Session]),
     regine_server:register(?SERVER, Session, PeerId, {PeerId, SessionId}),
     {ok, Session}.
 
@@ -34,7 +36,7 @@ lookup(PeerId, SessionId) ->
     lookup({PeerId, SessionId}).
 
 lookup(SessionId) ->
-    lager:debug("session lookup: ~p", [ets:lookup(?SERVER, SessionId)]),
+    ?LOG(debug, "session lookup: ~p", [ets:lookup(?SERVER, SessionId)]),
     case ets:lookup(?SERVER, SessionId) of
 	[] ->
 	    false;

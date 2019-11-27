@@ -20,7 +20,9 @@
 -export([c_initial/2, c_closed/2, c_pending/2, c_authreq/2, c_open/2,c_badauth/2]).
 -export([s_initial/2, s_closed/2, s_pending/2, s_listen/2, s_open/2, s_badauth/2]).
 
--define(SERVER, ?MODULE). 
+-include_lib("kernel/include/logger.hrl").
+
+-define(SERVER, ?MODULE).
 
 %% Client states.
 -type client_state() ::
@@ -125,13 +127,13 @@ handle_call(Event, _From, State)
     {reply, ok, NewState1};
 
 handle_call(Frame = {pap, 'PAP-Authentication-Request', _, _, _}, _From, State) ->
-    lager:debug("~p(~p): got ~p", [?MODULE, ?LINE, Frame]),
+    ?LOG(debug, "~p(~p): got ~p", [?MODULE, ?LINE, Frame]),
     fsm_server_call(Frame, State);
 
 handle_call(Frame = {pap, Code, _, _}, _From, State)
   when Code == 'PAP-Authenticate-Ack';
        Code == 'PAP-Authenticate-Nak'->
-    lager:debug("~p(~p): got ~p", [?MODULE, ?LINE, Frame]),
+    ?LOG(debug, "~p(~p): got ~p", [?MODULE, ?LINE, Frame]),
     fsm_client_call(Frame, State);
 
 handle_call(auth_peer, _From, State) ->
@@ -152,7 +154,7 @@ handle_call(protrej, _From, State) ->
     {reply, ok, NewState3};
 
 handle_call(Event, _From, State) ->
-    lager:debug("~p(~p): got ~p", [?MODULE, ?LINE, Event]),
+    ?LOG(debug, "~p(~p): got ~p", [?MODULE, ?LINE, Event]),
     {_, NewState0} = fsm_client_call(Event, State),
     {_, NewState1} = fsm_server_call(Event, NewState0),
     {reply, ok, NewState1}.
@@ -171,11 +173,11 @@ handle_info({timeout, TimerRef, timeout}, State = #state{s_timer = TimerRef}) ->
     fsm_server_cast(timeout, NewState);
 
 handle_info({'EXIT', Link, _Reason}, State = #state{link = Link}) ->
-    lager:debug("~s: Link ~p terminated", [?MODULE, Link]),
+    ?LOG(debug, "~s: Link ~p terminated", [?MODULE, Link]),
     {stop, normal, State};
 
 handle_info(Info, State) ->
-    lager:debug("~s: got info: ~p", [?MODULE, Info]),
+    ?LOG(debug, "~s: got info: ~p", [?MODULE, Info]),
     {noreply, State}.
 	
 terminate(_Reason, _State) ->
@@ -248,12 +250,12 @@ c_authreq(timeout, State) ->
     {reply, ok, c_authreq, NewState};
 
 c_authreq({pap, 'PAP-Authenticate-Ack', _Id, Msg}, State) ->
-    lager:debug("PAP: ~p", [Msg]),
+    ?LOG(debug, "PAP: ~p", [Msg]),
     {reply, {auth_withpeer, success}, c_open, State};
 
 c_authreq({pap, 'PAP-Authenticate-Nak', _Id, Msg}, State) ->
     %% error("PAP authentication failed");
-    lager:debug("PAP: ~p", [Msg]),
+    ?LOG(debug, "PAP: ~p", [Msg]),
     {reply, {auth_withpeer, fail}, c_badauth, State};
 
 c_authreq(_Msg, State) ->
@@ -373,7 +375,7 @@ fsm_client_cast(Msg, State = #state{c_state = StateName}) ->
     fsm_cast_reply(#state.c_state, ?MODULE:StateName(Msg, State)).
 
 fsm_call_reply(Element, {reply, Reply, NextStateName, NewStateData}) ->
-    lager:debug("new state ~p", [NextStateName]),
+    ?LOG(debug, "new state ~p", [NextStateName]),
     {reply, Reply, setelement(Element, NewStateData, NextStateName)};
 
 %% TODO: do we allow stop?
@@ -381,11 +383,11 @@ fsm_call_reply(_Element, {stop, Reason, NewStateData}) ->
     {stop, Reason, NewStateData}.
 			 
 fsm_server_call(Msg, State = #state{s_state = StateName}) ->
-    lager:debug("server_call in ~p", [StateName]),
+    ?LOG(debug, "server_call in ~p", [StateName]),
     fsm_call_reply(#state.s_state, ?MODULE:StateName(Msg, State)).
 
 fsm_client_call(Msg, State = #state{c_state = StateName}) ->
-    lager:debug("client_call in ~p", [StateName]),
+    ?LOG(debug, "client_call in ~p", [StateName]),
     fsm_call_reply(#state.c_state, ?MODULE:StateName(Msg, State)).
 
 %%===================================================================
@@ -420,7 +422,7 @@ link_send(Link, Data) ->
     ppp_link:send(Link, Data).
 
 send_packet(Packet, State = #state{link = Link}) ->
-    lager:debug("PAP Sending: ~p", [Packet]),
+    ?LOG(debug, "PAP Sending: ~p", [Packet]),
     Data = ppp_frame:encode(Packet),
     link_send(Link, Data),
     State.
