@@ -1,11 +1,13 @@
-sudo: false
+dist: xenial
 
 language: erlang
 
 otp_release:
- - 19.1
- - 19.2
- - 19.3
+ - 21.1.4
+ - 21.2.7
+ - 21.3.8.1
+ - 22.0.7
+ - 22.1.8
 
 install: "true"
 
