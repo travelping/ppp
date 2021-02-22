@@ -423,7 +423,7 @@ link_send(Link, Data) ->
 
 send_packet(Packet, State = #state{link = Link}) ->
     ?LOG(debug, "PAP Sending: ~p", [Packet]),
-    Data = ppp_frame:encode(Packet),
+    Data = ppplib:frame_encode(Packet),
     link_send(Link, Data),
     State.
 

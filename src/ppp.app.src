@@ -1,7 +1,7 @@
 {application, ppp,
  [
-  {description, ""},
-  {vsn, "1"},
+  {description, "PPP"},
+  {vsn, "1.0.0"},
   {registered, []},
   {applications, [
                   kernel,

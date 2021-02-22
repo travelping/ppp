@@ -373,7 +373,7 @@ opened({timeout, _Ref, request_echo}, ReqId,
 
 opened({protocol_reject, Request}, ReqId, State) ->
     Protocol = element(1, Request),
-    <<_:16, BinRequest/binary>> = ppp_frame:encode(Request),
+    <<_:16, BinRequest/binary>> = ppplib:frame_encode(Request),
     NewReqId = ReqId + 1,
     SendReq = {?PROTOCOL, 'CP-Protocol-Reject', NewReqId, Protocol, BinRequest},
     {send, SendReq, NewReqId, opened, State}.

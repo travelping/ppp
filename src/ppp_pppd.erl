@@ -73,7 +73,7 @@ init([Role]) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call({send, Packet}, _From, State = #state{port = Port}) ->
-    Data = ppp_hdlc:encapsulate([{16#ff, 16#03, Packet}]),
+    Data = ppplib:hdlc_encapsulate([{16#ff, 16#03, Packet}]),
     port_command(Port, Data),
     {reply, ok, State}.
 
@@ -103,7 +103,7 @@ handle_cast(Msg, State) ->
 %%--------------------------------------------------------------------
 handle_info({Port, {data, Data}}, State = #state{port = Port, connection = Connection}) ->
     ?LOG(debug, "pppd Data: ~p", [Data]),
-    HDLC = ppp_hdlc:decapsulate(Data),
+    HDLC = ppplib:hdlc_decapsulate(Data),
     lists:foreach(fun({_Address, _Control, PPP}) -> ppp_link:packet_in(Connection, PPP) end, HDLC),
     {noreply, State};
 

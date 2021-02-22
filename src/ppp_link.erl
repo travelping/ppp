@@ -58,7 +58,7 @@
 %%%===================================================================
 
 packet_in(Connection, Packet) ->
-    gen_statem:cast(Connection, {packet_in, ppp_frame:decode(Packet)}).
+    gen_statem:cast(Connection, {packet_in, ppplib:frame_decode(Packet)}).
 
 send(Connection, Packet) ->
     gen_statem:cast(Connection, {packet_out, Packet}).
